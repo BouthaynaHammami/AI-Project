@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy.orm import Session
 from pathlib import Path
 
 import pandas as pd
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.security import get_current_user
 from app.models.dataset import Dataset
+from app.models.user import User
 from app.schemas.dataset import (
     DatasetPreviewResponse,
     DatasetResponse,
@@ -22,7 +24,8 @@ router = APIRouter(
 @router.post("/upload", response_model=DatasetResponse)
 async def upload_dataset(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload and register a CSV or XLSX dataset.
@@ -49,6 +52,7 @@ async def upload_dataset(
         )
 
     dataset = Dataset(
+        user_id=current_user.id,
         filename=file.filename,
         file_path=str(file_path),
         file_type=file_path.suffix.lower().replace(".", ""),
@@ -62,10 +66,12 @@ async def upload_dataset(
 
     return dataset
 
+
 @router.get("/{dataset_id}/preview", response_model=DatasetPreviewResponse)
 def get_dataset_preview(
     dataset_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Return basic information and a preview of an uploaded dataset.
@@ -77,6 +83,12 @@ def get_dataset_preview(
         raise HTTPException(
             status_code=404,
             detail="Dataset not found."
+        )
+
+    if dataset.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have access to this dataset."
         )
 
     file_path = Path(dataset.file_path)
