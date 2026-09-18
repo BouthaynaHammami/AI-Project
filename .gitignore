@@ -1,5 +1,7 @@
 .env/
 .pytest_cache/
 backend/.pytest_cache/
+backend/database.db
+backend/uvicorn
 __pycache__/
 *.pyc
