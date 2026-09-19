@@ -1,0 +1,15 @@
+import { ArrowLeft, Camera, Check, LockKeyhole, Save, UserRound } from 'lucide-react'
+import { useRef, useState } from 'react'
+
+type Props = { initialName: string; onBack: () => void; onSaveName: (name: string) => void }
+
+export function SettingsPage({ initialName, onBack, onSaveName }: Props) {
+  const photoInput = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState(initialName)
+  const [email, setEmail] = useState('')
+  const [photo, setPhoto] = useState('')
+  const [saved, setSaved] = useState(false)
+  const choosePhoto = (file?: File) => { if (!file) return; setPhoto(URL.createObjectURL(file)); setSaved(false) }
+  const save = () => { onSaveName(name.trim() || initialName); setSaved(true); setTimeout(() => setSaved(false), 2500) }
+  return <div className="settings-page"><div className="settings-page-inner"><button className="settings-back" onClick={onBack}><ArrowLeft size={16} /> Retour à l’analyse</button><div className="settings-heading"><div><span className="workspace-kicker">COMPTE UTILISATEUR</span><h1>Paramètres du profil</h1><p>Gérez vos informations personnelles et vos préférences.</p></div><button className="primary-button save-top" onClick={save}>{saved ? <><Check size={16} /> Enregistré</> : <><Save size={16} /> Enregistrer</>}</button></div><div className="settings-layout"><section className="settings-card profile-card"><div className="settings-card-heading"><div><span className="section-kicker">VOTRE PROFIL</span><h2>Informations personnelles</h2></div></div><div className="profile-photo-row"><div className="profile-photo">{photo ? <img src={photo} alt="Photo de profil" /> : <UserRound size={30} />}</div><div><strong>Photo de profil</strong><p>JPG ou PNG, 5 MB maximum.</p><input ref={photoInput} type="file" accept="image/png,image/jpeg" hidden onChange={(event) => choosePhoto(event.target.files?.[0])} /><button className="photo-button" onClick={() => photoInput.current?.click()}><Camera size={15} /> Changer la photo</button></div></div><label>Nom complet<input value={name} onChange={(event) => { setName(event.target.value); setSaved(false) }} /></label><label>Email professionnel<input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setSaved(false) }} /></label></section><section className="settings-card"><div className="settings-card-heading"><div><span className="section-kicker">SÉCURITÉ</span><h2>Modifier le mot de passe</h2></div><LockKeyhole size={18} /></div><label>Mot de passe actuel<input type="password" placeholder="••••••••" /></label><label>Nouveau mot de passe<input type="password" placeholder="••••••••" /></label><label>Confirmer le nouveau mot de passe<input type="password" placeholder="••••••••" /></label><p className="password-hint">Utilisez au moins 8 caractères avec un mélange de lettres et de chiffres.</p></section></div></div></div>
+}
