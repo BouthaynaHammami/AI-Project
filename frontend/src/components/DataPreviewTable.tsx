@@ -1,0 +1,9 @@
+import { Rows3 } from 'lucide-react'
+import type { DatasetPreview } from '../services/fileService'
+
+type Props = { dataset: DatasetPreview | null }
+
+export function DataPreviewTable({ dataset }: Props) {
+  if (!dataset) return <section className="preview-card empty-state"><Rows3 size={22} /><p>Aucun aperçu disponible. Importez un fichier pour afficher ses données.</p></section>
+  return <section className="preview-card"><div className="preview-header"><div><span className="section-kicker">APERÇU DU FICHIER</span><h2>{dataset.filename}</h2></div><span className="success-badge">● Données prêtes</span></div><div className="stats-row"><div><strong>{dataset.row_count.toLocaleString('fr-FR')}</strong><span>Lignes</span></div><div><strong>{dataset.column_count}</strong><span>Colonnes</span></div><div className="columns-stat"><Rows3 size={16} /><span>{dataset.column_names.join(' · ')}</span></div></div><div className="table-wrap"><table><thead><tr>{dataset.column_names.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{dataset.preview.map((row, rowIndex) => <tr key={rowIndex}>{dataset.column_names.map((column) => <td key={column}>{String(row[column] ?? '')}</td>)}</tr>)}</tbody></table></div></section>
+}

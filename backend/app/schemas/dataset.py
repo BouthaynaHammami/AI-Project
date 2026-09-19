@@ -22,3 +22,7 @@ class DatasetPreviewResponse(BaseModel):
     column_count: int
     column_names: list[str]
     preview: list[dict]
+
+
+class DatasetUploadResponse(DatasetPreviewResponse):
+    dataset_id: int

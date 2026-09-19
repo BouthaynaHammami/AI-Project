@@ -19,3 +19,12 @@ class AnalysisResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AnalysisAskResponse(BaseModel):
+    id: int
+    dataset_id: int
+    question: str
+    type: str
+    content: str
+    created_at: datetime

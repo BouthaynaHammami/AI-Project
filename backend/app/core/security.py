@@ -16,6 +16,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
+REVOKED_TOKENS: set[str] = set()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -44,6 +45,8 @@ def get_current_user(
         )
 
     token = credentials.credentials
+    if token in REVOKED_TOKENS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired.")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str | None = payload.get("sub")

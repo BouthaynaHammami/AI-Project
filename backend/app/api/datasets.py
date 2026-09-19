@@ -10,18 +10,18 @@ from app.models.dataset import Dataset
 from app.models.user import User
 from app.schemas.dataset import (
     DatasetPreviewResponse,
-    DatasetResponse,
+    DatasetUploadResponse,
 )
 from app.services.file_service import save_and_read_file
 
 
 router = APIRouter(
-    prefix="/api/datasets",
+    prefix="/files",
     tags=["Datasets"]
 )
 
 
-@router.post("/upload", response_model=DatasetResponse)
+@router.post("/upload", response_model=DatasetUploadResponse)
 async def upload_dataset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -64,7 +64,15 @@ async def upload_dataset(
     db.commit()
     db.refresh(dataset)
 
-    return dataset
+    return DatasetUploadResponse(
+        dataset_id=dataset.id,
+        id=dataset.id,
+        filename=dataset.filename,
+        row_count=len(dataframe),
+        column_count=len(dataframe.columns),
+        column_names=[str(column) for column in dataframe.columns],
+        preview=dataframe.head(5).where(dataframe.head(5).notna(), None).to_dict(orient="records"),
+    )
 
 
 @router.get("/{dataset_id}/preview", response_model=DatasetPreviewResponse)
