@@ -21,9 +21,9 @@ api.interceptors.response.use((response) => response, (error) => {
 
 export const getApiError = (error: unknown) => {
   if (axios.isAxiosError(error)) {
-    if (error.response?.status === 409) return 'Ce compte existe déjà. Utilisez une autre adresse email ou connectez-vous.'
-    if (error.response?.status === 401) return 'Email ou mot de passe incorrect.'
-    if (error.response?.status === 422) return 'Vérifiez les informations saisies dans tous les champs.'
+    if (error.response?.status === 409) return 'Cette adresse email est déjà utilisée. Connectez-vous ou choisissez une autre adresse.'
+    if (error.response?.status === 401) return 'Vérifiez vos données : adresse email et mot de passe incorrects.'
+    if (error.response?.status === 422) return 'Vérifiez vos données : l’adresse email doit être valide et le mot de passe doit contenir au moins 8 caractères.'
     return error.response?.data?.detail ?? 'Une erreur réseau est survenue.'
   }
   return 'Une erreur inattendue est survenue.'

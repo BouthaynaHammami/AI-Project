@@ -26,3 +26,11 @@ class DatasetPreviewResponse(BaseModel):
 
 class DatasetUploadResponse(DatasetPreviewResponse):
     dataset_id: int
+
+
+class DatasetHistoryResponse(BaseModel):
+    id: int
+    filename: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

@@ -1,0 +1,20 @@
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 12px;
+  margin-top: 14px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #dc2626;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.auth-error {
+  position: static;
+  box-shadow: 0 4px 12px #991b1b12;
+}

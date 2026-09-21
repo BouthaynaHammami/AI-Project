@@ -27,4 +27,5 @@ class AnalysisAskResponse(BaseModel):
     question: str
     type: str
     content: str
+    chart_config: str | None = None
     created_at: datetime

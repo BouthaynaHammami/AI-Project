@@ -17,7 +17,13 @@ if engine.url.get_backend_name() == "postgresql":
 app = FastAPI(title="AI Data Analyst API")
 
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-allowed_origins = list(dict.fromkeys([frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"]))
+allowed_origins = list(dict.fromkeys([
+    frontend_origin,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,

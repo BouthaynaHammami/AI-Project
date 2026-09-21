@@ -9,6 +9,7 @@ from app.core.security import get_current_user
 from app.models.dataset import Dataset
 from app.models.user import User
 from app.schemas.dataset import (
+    DatasetHistoryResponse,
     DatasetPreviewResponse,
     DatasetUploadResponse,
 )
@@ -19,6 +20,11 @@ router = APIRouter(
     prefix="/files",
     tags=["Datasets"]
 )
+
+
+@router.get("/history", response_model=list[DatasetHistoryResponse])
+def get_dataset_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return db.query(Dataset).filter(Dataset.user_id == current_user.id).order_by(Dataset.created_at.desc()).all()
 
 
 @router.post("/upload", response_model=DatasetUploadResponse)
