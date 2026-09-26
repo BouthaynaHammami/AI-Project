@@ -1,8 +1,187 @@
-{
-  "owner": "BouthaynaHammami",
-  "repo": "AI-Project",
-  "path": "README.md",
-  "branch": "Main",
-  "message": "Amélioration du README avec couleurs, icônes et design",
-  "content": "# 🤖 AI Data Analyst\n\n> 📊 **Projet académique** — Assistant d'analyse de données par IA (approche agentique)\n\n<div align=\"center\">\n\n![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)\n![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=white)\n![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=for-the-badge&logo=fastapi&logoColor=white)\n![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?style=for-the-badge&logo=postgresql&logoColor=white)\n![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)\n\n**École :** ESPRIT (École Supérieure Privée d'Ingénierie et de Technologies)  \n**Classe :** 5ème 7 | **Module :** 🧠 Intelligence Artificielle (IA)\n\n</div>\n\n---\n\n## 👥 Équipe\n\n<table>\n  <tr>\n    <td align=\"center\">👤 Bouthayna Hammami</td>\n    <td align=\"center\">👤 Sourour Alaimi</td>\n    <td align=\"center\">👤 Mayssa Klibi</td>\n  </tr>\n  <tr>\n    <td align=\"center\">👤 Islem Bouchaala</td>\n    <td align=\"center\">👤 Hazem Ouasli</td>\n    <td align=\"center\">👤 Islem Raissi</td>\n  </tr>\n</table>\n\n---\n\n## 📝 Description\n\n**AI Data Analyst** est une application web **full-stack** qui permet à un utilisateur d'importer un fichier de données (CSV/Excel) et de poser des questions en langage naturel pour obtenir une analyse intelligente et automatisée.\n\n### 🎯 Fonctionnement simplifié\n\n```\n📤 Importer données → ❓ Poser question → 🤖 IA génère code → ⚙️ Code s'exécute → 📊 Résultat + graphique\n```\n\n**Exemple :**\n> *\"Quel mois a le meilleur chiffre d'affaires ?\"*\n\nL'IA :\n1. 🔧 Génère le code Python/Pandas correspondant\n2. ⚡ L'exécute sur les vraies données du fichier importé\n3. 🔄 Corrige automatiquement le code en cas d'erreur\n4. 📢 Reformule le résultat en une réponse claire, en français\n\n---\n\n## 🎓 Objectifs du projet\n\n| 🎯 | Objectif |\n|---|---|\n| 🔓 | Permettre à n'importe quel utilisateur, technique ou non, d'analyser un jeu de données |\n| 🧠 | Démontrer une architecture **agentique** : l'IA génère et exécute du code |\n| 🏗️ | Construire une application complète : auth, upload, historique, chat |\n| 💰 | Utiliser des modèles IA accessibles gratuitement pour la reproductibilité académique |\n\n---\n\n## ⚙️ Fonctionnement détaillé\n\n<div align=\"left\">\n\n```\n┌─────────────────────────────────────────────────────────────┐\n│                    🌐 UTILISATEUR                           │\n└────────────────┬────────────────────────────────────────────┘\n                 │\n         1️⃣ Import fichier (CSV/XLSX)\n                 │\n                 ▼\n┌─────────────────────────────────────────────────────────────┐\n│                  📁 BACKEND (FastAPI)                       │\n│  • Stockage fichier                                         │\n│  • Aperçu données (colonnes, 5 premières lignes)            │\n└────────────────┬────────────────────────────────────────────┘\n                 │\n         2️⃣ Question en langage naturel\n                 │\n                 ▼\n┌─────────────────────────────────────────────────────────────┐\n│              🤖 LLM (API Groq - Qwen 27B)                   │\n│  • Génération code Python/Pandas                            │\n└────────────────┬────────────────────────────────────────────┘\n                 │\n         3️⃣ Code généré\n                 │\n                 ▼\n┌─────────────────────────────────────────────────────────────┐\n│            ⚡ EXÉCUTION & CORRECTION                        │\n│  • Exécution sur vraies données                             │\n│  • 1 retry automatique en cas d'erreur                      │\n└────────────────┬────────────────────────────────────────────┘\n                 │\n         4️⃣ Résultat + Graphique\n                 │\n                 ▼\n┌─────────────────────────────────────────────────────────────┐\n│              💻 FRONTEND (React + TailwindCSS)              │\n│  • Affichage résultat en français                           │\n│  • Visualisation graphique (Recharts)                       │\n│  • Historique des analyses                                  │\n└─────────────────────────────────────────────────────────────┘\n```\n\n</div>\n\n---\n\n## 🛠️ Stack technique\n\n<table>\n  <thead>\n    <tr>\n      <th>📦 Composant</th>\n      <th>🔧 Technologie</th>\n      <th>🎯 Version</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <td><strong>🔙 Backend</strong></td>\n      <td>Python, FastAPI, SQLAlchemy 2.0, Pydantic v2</td>\n      <td>3.11+</td>\n    </tr>\n    <tr>\n      <td><strong>🗄️ Base de données</strong></td>\n      <td>PostgreSQL (SQLite en fallback local)</td>\n      <td>15+</td>\n    </tr>\n    <tr>\n      <td><strong>🔐 Authentification</strong></td>\n      <td>JWT (python-jose) + bcrypt</td>\n      <td>Latest</td>\n    </tr>\n    <tr>\n      <td><strong>🎨 Frontend</strong></td>\n      <td>React, TypeScript, Vite, TailwindCSS v4</td>\n      <td>19</td>\n    </tr>\n    <tr>\n      <td><strong>📊 Analyse données</strong></td>\n      <td>Pandas</td>\n      <td>2.0+</td>\n    </tr>\n    <tr>\n      <td><strong>🤖 Modèle IA</strong></td>\n      <td>Qwen 27B via API Groq</td>\n      <td>Gratuit</td>\n    </tr>\n    <tr>\n      <td><strong>📈 Graphiques</strong></td>\n      <td>Recharts</td>\n      <td>Latest</td>\n    </tr>\n  </tbody>\n</table>\n\n---\n\n## ✨ Fonctionnalités\n\n<div align=\"center\">\n\n| Fonctionnalité | Statut |\n|---|---|\n| 🔑 Authentification complète (signup/login/logout) | ✅ Complète |\n| 👤 Gestion du profil utilisateur | ✅ Complète |\n| 📂 Import CSV/XLSX avec aperçu | ✅ Complète |\n| 💬 Interface de chat en langage naturel | ✅ Complète |\n| 🧠 Génération code Pandas par IA | ✅ Complète |\n| ⚙️ Exécution sur vraies données | ✅ Complète |\n| 🔄 Correction automatique d'erreurs | ✅ Complète |\n| 📊 Génération graphiques interactifs | ✅ Complète |\n| 📜 Historique des analyses | ✅ Complète |\n\n</div>\n\n---\n\n## 📂 Structure du projet\n\n```\nAI-Data-Analyst/\n│\n├── 🔙 backend/\n│   ├── app/\n│   │   ├── 🔌 api/\n│   │   │   ├── auth.py          # Routes authentification\n│   │   │   ├── files.py         # Routes fichiers\n│   │   │   └── analysis.py      # Routes analyse\n│   │   │\n│   │   ├── 🗂️ models/\n│   │   │   ├── users.py         # Modèle User\n│   │   │   ├── datasets.py      # Modèle Dataset\n│   │   │   └── analyses.py      # Modèle Analysis\n│   │   │\n│   │   ├── 📋 schemas/\n│   │   │   ├── user_schema.py\n│   │   │   ├── dataset_schema.py\n│   │   │   └── analysis_schema.py\n│   │   │\n│   │   ├── ⚙️ services/\n│   │   │   ├── file_service.py      # Logique fichiers\n│   │   │   ├── auth_service.py      # Logique auth\n│   │   │   └── ai_service.py        # Logique IA/analyse\n│   │   │\n│   │   └── 🔧 core/\n│   │       ├── config.py        # Configuration\n│   │       ├── security.py      # Sécurité JWT\n│   │       └── database.py      # Connexion DB\n│   │\n│   ├── 📄 requirements.txt\n│   ├── 🌍 .env.example\n│   └── 🚀 main.py\n│\n├── 🎨 frontend/\n│   ├── src/\n│   │   ├── 🧩 components/\n│   │   │   ├── Sidebar.tsx\n│   │   │   ├── ChatWindow.tsx\n│   │   │   ├── AnalysisBar.tsx\n│   │   │   └── ...\n│   │   │\n│   │   ├── 🪝 hooks/\n│   │   │   └── useDemoData.ts   # État central\n│   │   │\n│   │   ├── 🌐 services/\n│   │   │   ├── api.ts           # Appels API\n│   │   │   ├── auth.ts\n│   │   │   ├── files.ts\n│   │   │   └── analysis.ts\n│   │   │\n│   │   └── 📝 types.ts          # Types TypeScript\n│   │\n│   ├── 📄 package.json\n│   ├── ⚙️ vite.config.ts\n│   └── 🎨 tailwind.config.js\n│\n└── 📋 .gitignore\n```\n\n---\n\n## 🚀 Installation et démarrage\n\n### 🔙 Backend\n\n```bash\n# 1️⃣ Naviguer vers le dossier backend\ncd backend\n\n# 2️⃣ Installer les dépendances\npip install -r requirements.txt\n\n# 3️⃣ Créer le fichier .env\ncp .env.example .env\n\n# 4️⃣ Configurer les variables d'environnement\n# Éditer .env et renseigner DATABASE_URL et GROQ_API_KEY\n\n# 5️⃣ Lancer le serveur\nuvicorn app.main:app --reload\n```\n\n**Serveur disponible à :** `http://localhost:8000`  \n**Documentation API :** `http://localhost:8000/docs`\n\n### 🎨 Frontend\n\n```bash\n# 1️⃣ Naviguer vers le dossier frontend\ncd frontend\n\n# 2️⃣ Installer les dépendances\nnpm install\n\n# 3️⃣ Lancer le serveur de développement\nnpm run dev\n```\n\n**Application disponible à :** `http://localhost:5173`\n\n---\n\n## 🌍 Variables d'environnement\n\n### 📄 `backend/.env`\n\n```env\n# 🗄️ Base de données\nDATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/ai_data_analyst\n\n# 🔐 JWT\nJWT_SECRET_KEY=your-super-secret-key-change-in-production\nJWT_ALGORITHM=HS256\nJWT_EXPIRE_MINUTES=60\n\n# 🌐 Frontend\nFRONTEND_ORIGIN=http://localhost:5173\n\n# 🤖 IA - Groq API\nGROQ_API_KEY=your-groq-api-key-from-console.groq.com\nGROQ_MODEL=qwen-27b-instruct  # ou qwen-3.8-27b\n```\n\n### 📝 Obtenir une clé Groq API\n\n1. 🌐 Aller sur [console.groq.com](https://console.groq.com)\n2. 📝 Créer un compte\n3. 🔑 Générer une clé API\n4. 📋 Copier-coller dans `.env`\n\n---\n\n## 🎯 Prochaines améliorations\n\n- [ ] 🔍 Recherche dans l'historique des analyses\n- [ ] 📊 Support de plus de formats (JSON, Parquet)\n- [ ] 🌐 Partage d'analyses entre utilisateurs\n- [ ] 📱 Responsive design amélioré\n- [ ] 🔄 Caching des résultats\n- [ ] 🌍 Internationalisation (EN/FR/AR)\n- [ ] 🎨 Thème sombre (Dark Mode)\n- [ ] 📈 Statistiques d'utilisation\n\n---\n\n## 📄 Licence\n\nCe projet est sous licence **MIT**. Voir le fichier `LICENSE` pour plus de détails.\n\n---\n\n<div align=\"center\">\n\n### ⭐ Si ce projet vous plaît, n'oubliez pas de mettre une star !\n\n**Fait avec ❤️ par l'équipe ESPRIT - 5ème 7**\n\n</div>\n"
-}
+# 🤖 AI Data Analyst
+
+> Assistant d'analyse de données piloté par l'intelligence artificielle pour explorer, comprendre et transformer des données avec une approche agentique.
+
+<div align="center">
+
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?style=for-the-badge&logo=fastapi)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=for-the-badge&logo=postgresql)
+![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react)
+
+</div>
+
+## 📌 Vue d'ensemble
+
+AI Data Analyst est un projet académique visant à concevoir un assistant intelligent capable de :
+
+- importer et analyser des jeux de données,
+- interpréter les résultats via une logique d'IA,
+- proposer des insights exploitables,
+- faciliter l'interaction entre l'utilisateur et les données.
+
+Le projet combine un backend API robuste avec une interface utilisateur moderne, dans une architecture pensée pour le traitement de données et l'analyse intelligente.
+
+## ✨ Fonctionnalités
+
+- Analyse de datasets structurés et semi-structurés,
+- assistance à la compréhension des données,
+- API REST avec authentification,
+- gestion des utilisateurs et des analyses,
+- interface web pour interagir facilement avec le système,
+- architecture modulaire pour extension future.
+
+## 🏗️ Architecture du projet
+
+```text
+AI-Project/
+├── backend/                 # API FastAPI + services métiers
+│   ├── app/
+│   ├── uploads/
+│   ├── .env
+│   ├── requirements.txt
+│   └── README.md
+├── frontend/               # Interface utilisateur (si présent)
+│   ├── src/
+│   ├── package.json
+│   └── README.md
+├── .gitignore
+├── README.md
+└── .env.example
+```
+
+## 🧰 Stack technique
+
+- Python 3.11+
+- FastAPI
+- SQLAlchemy
+- PostgreSQL
+- JWT Authentication
+- React / Vite (si applicable au frontend)
+- Git + GitHub
+
+## 🚀 Installation
+
+### 1. Cloner le projet
+
+```bash
+git clone https://github.com/BouthaynaHammami/AI-Project.git
+cd AI-Project
+```
+
+### 2. Créer un environnement virtuel
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Sous Windows PowerShell :
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. Installer les dépendances backend
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+### 4. Configurer les variables d'environnement
+
+Créer un fichier `.env` dans le dossier `backend` avec une configuration similaire à :
+
+```env
+DATABASE_URL=postgresql+psycopg2://postgres:123@localhost:5432/ai_data_analyst
+JWT_SECRET_KEY=your_secret_key
+FRONTEND_ORIGIN=http://localhost:5173
+```
+
+## ▶️ Lancer l'application
+
+### Backend
+
+```bash
+cd backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Documentation API
+
+Une fois le backend démarré, ouvrez :
+
+```text
+http://localhost:8000/docs
+```
+
+## 🔐 Endpoints principaux
+
+### Authentification
+
+- `POST /auth/register`
+- `POST /auth/login`
+- `GET /auth/me`
+
+### Données
+
+- `GET /datasets`
+- `POST /datasets`
+
+### Analyses
+
+- `GET /analyses`
+- `POST /analyses`
+
+## 📁 Structure interne du backend
+
+```text
+backend/
+├── app/
+│   ├── api/
+│   ├── core/
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   └── main.py
+├── uploads/
+├── .env
+├── requirements.txt
+├── README.md
+└── uvicorn
+```
+
+## 🧪 Développement
+
+- Le backend crée automatiquement les tables nécessaires au démarrage.
+- PostgreSQL est requis pour le stockage des données.
+- Les routes sensibles sont protégées par authentification JWT.
+
+## 🛠️ Dépannage
+
+### Le backend ne démarre pas
+
+- Vérifier que le virtual environment est activé,
+- vérifier que PostgreSQL est bien démarré,
+- valider le contenu de `.env`,
+- réinstaller les dépendances si nécessaire.
+
+### Problème de connexion à la base
+
+- Vérifier l'URL de connexion `DATABASE_URL`,
+- vérifier le nom de la base, le port et les identifiants,
+- vérifier que le service PostgreSQL tourne correctement.
+
+## 📚 À retenir
+
+Ce projet est conçu comme une base solide pour une solution d'analyse de données assistée par IA, avec une architecture scalable et extensible.
+
+## 📝 Licence
+
+Ce projet est destiné à un usage académique et de démonstration.
+
+---
+
+Projet développé dans le cadre d'un travail académique sur l'analyse de données assistée par l'IA.
