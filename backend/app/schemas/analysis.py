@@ -1,10 +1,11 @@
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnalysisCreate(BaseModel):
-    dataset_id: int
+    dataset_ids: list[int] = Field(..., min_length=1)
     question: str = Field(..., min_length=1, max_length=1000)
 
 

@@ -33,10 +33,10 @@ export const useDemoData = () => {
     setMessages(messages)
     return { dataset, question: entry.question, chartConfig: entry.chartConfig }
   }
-  const askQuestion = async (question: string, datasetId?: number) => {
+    const askQuestion = async (question: string, datasetIds?: number[]) => {
     const time = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
     setMessages((current) => [...current, { id: Date.now(), role: 'user', content: question, timestamp: time }])
-    try { if (!datasetId) throw new Error('Importez un fichier avant de poser une question.'); const answer = await askQuestionApi(datasetId, question); setMessages((current) => [...current, { id: Date.now() + 1, role: 'assistant', content: answer.content, timestamp: time }]); await refreshHistory(); return answer } catch (error) { setMessages((current) => [...current, { id: Date.now() + 1, role: 'assistant', content: getApiError(error), timestamp: time }]); return undefined }
+    try { if (!datasetIds || datasetIds.length === 0) throw new Error('Importez un fichier avant de poser une question.'); const answer = await askQuestionApi(datasetIds, question); setMessages((current) => [...current, { id: Date.now() + 1, role: 'assistant', content: answer.content, timestamp: time }]); await refreshHistory(); return answer } catch (error) { setMessages((current) => [...current, { id: Date.now() + 1, role: 'assistant', content: getApiError(error), timestamp: time }]); return undefined }
   }
   return { history, messages, askQuestion, loadHistoryEntry, refreshHistory }
 }
