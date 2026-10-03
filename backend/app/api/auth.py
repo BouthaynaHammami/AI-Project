@@ -67,6 +67,8 @@ def update_me(user_data: UserUpdate, current_user: User = Depends(get_current_us
         current_user.name = user_data.name.strip()
     if user_data.password:
         current_user.password_hash = get_password_hash(user_data.password)
+    if user_data.profile_photo is not None:
+        current_user.profile_photo = user_data.profile_photo
     db.commit()
     db.refresh(current_user)
     return current_user

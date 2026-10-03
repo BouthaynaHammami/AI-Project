@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app.api.analyses import router as analyses_router
 from app.api.auth import router as auth_router
@@ -13,6 +13,12 @@ Base.metadata.create_all(bind=engine)
 if engine.url.get_backend_name() == "postgresql":
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255) NOT NULL DEFAULT 'Utilisateur'"))
+        connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT"))
+elif engine.url.get_backend_name() == "sqlite":
+    user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    if "profile_photo" not in user_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE users ADD COLUMN profile_photo TEXT"))
 
 app = FastAPI(title="AI Data Analyst API")
 

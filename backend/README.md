@@ -103,3 +103,7 @@ http://localhost:8000/docs
 - Confirm PostgreSQL is running.
 - Check the `.env` file for a valid `DATABASE_URL`.
 - Reinstall the dependencies if needed.
+
+### Supported upload formats
+
+The upload API extracts data from CSV, XLS/XLSX, PDF, DOC/DOCX, PNG, and JPEG files. Install Python dependencies with `python -m pip install -r requirements.txt`. Image OCR and scanned-PDF OCR also require Tesseract OCR with French and English language data available on `PATH`. Reading legacy `.doc` files requires LibreOffice, antiword, or catdoc; `.docx` files do not need an external converter.

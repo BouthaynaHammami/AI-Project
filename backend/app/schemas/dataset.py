@@ -20,6 +20,8 @@ class DatasetPreviewResponse(BaseModel):
     filename: str
     row_count: int
     column_count: int
+    file_size_bytes: int
+    page_count: int | None = None
     column_names: list[str]
     preview: list[dict]
 

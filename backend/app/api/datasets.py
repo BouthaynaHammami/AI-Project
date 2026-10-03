@@ -16,7 +16,7 @@ from app.schemas.dataset import (
     DatasetPreviewResponse,
     DatasetUploadResponse,
 )
-from app.services.file_service import save_and_read_file
+from app.services.file_service import get_document_page_count, read_file_as_dataframe, save_and_read_file
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def upload_datasets(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Upload multiple CSV/XLSX files. Every file is registered as its own Dataset record."""
+    """Upload supported tabular, document, and image files as datasets."""
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
 
@@ -107,6 +107,8 @@ async def upload_datasets(
                     filename=dataset.filename,
                     row_count=int(len(dataframe)),
                     column_count=int(len(dataframe.columns)),
+                    file_size_bytes=len(content),
+                    page_count=get_document_page_count(file_path),
                     column_names=[str(column) for column in dataframe.columns],
                     preview=_build_preview(dataframe),
                 )
@@ -144,14 +146,9 @@ def get_dataset_preview(
         raise HTTPException(status_code=404, detail="Dataset file not found.")
 
     try:
-        if dataset.file_type.lower() == "csv":
-            dataframe = pd.read_csv(file_path)
-        elif dataset.file_type.lower() == "xlsx":
-            dataframe = pd.read_excel(file_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file format.")
-    except HTTPException:
-        raise
+        dataframe = read_file_as_dataframe(file_path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         logger.exception("Could not read dataset preview")
         raise HTTPException(status_code=500, detail="Could not read the dataset.") from error
@@ -161,6 +158,8 @@ def get_dataset_preview(
         filename=dataset.filename,
         row_count=int(dataset.row_count),
         column_count=int(dataset.column_count),
+        file_size_bytes=file_path.stat().st_size,
+        page_count=get_document_page_count(file_path),
         column_names=[str(column) for column in dataframe.columns],
         preview=_build_preview(dataframe),
     )

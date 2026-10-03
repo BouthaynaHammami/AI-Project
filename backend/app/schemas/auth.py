@@ -18,6 +18,7 @@ class UserPublic(BaseModel):
     id: int
     name: str
     email: EmailStr
+    profile_photo: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -32,3 +33,4 @@ class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=8)
+    profile_photo: str | None = None

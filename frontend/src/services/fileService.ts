@@ -7,6 +7,8 @@ export type DatasetPreview = {
   filename: string
   row_count: number
   column_count: number
+  file_size_bytes?: number
+  page_count?: number | null
   column_names: string[]
   preview: Record<string, unknown>[]
 }

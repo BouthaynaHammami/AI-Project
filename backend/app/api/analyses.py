@@ -1,7 +1,9 @@
 import logging
+import json
 from pathlib import Path
 
 import pandas as pd
+from groq import APIStatusError, RateLimitError
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,7 @@ from app.schemas.analysis import (
     AnalysisResponse,
 )
 from app.services.ai_service import analyze_dataset
+from app.services.file_service import read_file_as_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +39,12 @@ def _load_dataframe(dataset: Dataset) -> pd.DataFrame:
         )
 
     try:
-        if dataset.file_type.lower() == "csv":
-            return pd.read_csv(file_path)
-
-        return pd.read_excel(file_path)
-
+        return read_file_as_dataframe(file_path)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not read dataset file {dataset.filename}: {error}",
+        ) from error
     except Exception as error:
         logger.exception("Could not read dataset: %s", dataset.filename)
 
@@ -158,6 +162,7 @@ def ask_question(
         result = analyze_dataset(
             question,
             combined_df,
+            generate_chart=any(dataset.file_type.lower() in {"csv", "xls", "xlsx"} for dataset in datasets),
         )
 
     except RuntimeError as error:
@@ -167,6 +172,23 @@ def ask_question(
             status_code=503,
             detail=str(error),
         ) from error
+
+    except RateLimitError as error:
+        logger.warning("Groq generation limit reached: %s", error)
+        raise HTTPException(
+            status_code=503,
+            detail="La limite de génération de l’IA est atteinte. Réessayez dans une minute.",
+        ) from error
+
+    except APIStatusError as error:
+        logger.exception("Groq API request failed with status %s", error.status_code)
+        detail = (
+            "Le document dépasse la limite de contexte du service IA. "
+            "Le contenu envoyé a été réduit; réessayez."
+            if error.status_code == 413
+            else "Le service IA a refusé la requête. Réessayez dans un instant."
+        )
+        raise HTTPException(status_code=503, detail=detail) from error
 
     except Exception as error:
         logger.exception("Unexpected error from ai_service")
@@ -194,6 +216,7 @@ def ask_question(
         question=question,
         answer=answer,
         result_type="text",
+        result_data=json.dumps({"dataset_ids": dataset_ids}),
         chart_config=chart_config,
     )
 

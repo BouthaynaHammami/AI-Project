@@ -63,6 +63,8 @@ def _build_dataset_summary(df: pd.DataFrame) -> str:
 
     preview = df.head(_MAX_PREVIEW_ROWS)
     preview_csv = preview.to_csv(index=False)
+    if "content" in df.columns and len(preview_csv) > 10000:
+        preview_csv = preview_csv[:10000] + "\n[Contenu tronqué pour respecter la limite du service IA.]"
 
     return "\n".join(
         [
@@ -92,6 +94,14 @@ def _extract_python_code(text: str) -> str:
 
     if match:
         return match.group(1).strip()
+
+    open_fence = re.search(
+        r"```(?:python)?\s*(.*)$",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if open_fence:
+        return open_fence.group(1).strip()
 
     return text.strip()
 
@@ -137,8 +147,14 @@ def _execute_code(
 def _build_first_prompt(
     question: str,
     dataset_summary: str,
+    generate_chart: bool,
 ) -> str:
     """Construit le prompt principal."""
+    chart_instruction = (
+        "9. Un fichier CSV/Excel est présent. Crée un graphique pertinent si possible en agrégeant les données, sans parcourir ni imprimer chaque ligne."
+        if generate_chart
+        else "9. Si la question nécessite un graphique, crée une variable"
+    )
 
     return f"""
 Tu es un expert senior en analyse de données avec Python et pandas.
@@ -161,7 +177,7 @@ QUESTION DE L'UTILISATEUR :
 
 INSTRUCTIONS STRICTES :
 
-1. Génère UNIQUEMENT du code Python/pandas valide.
+1. Génère uniquement du code Python/pandas valide, très concis (moins de 400 tokens), sans commentaire ni Markdown.
 
 2. Utilise la variable `df` telle quelle.
 
@@ -179,10 +195,9 @@ INSTRUCTIONS STRICTES :
 7. Si l'utilisateur demande d'analyser plusieurs documents,
    prends en compte TOUS les fichiers disponibles.
 
-8. Affiche les résultats importants avec `print(...)`.
+8. Affiche une réponse courte à la question avec `print(...)`. Ne réimprime pas toutes les lignes ni le contenu intégral des documents.
 
-9. Si la question nécessite un graphique, crée une variable
-   `chart_data` sous cette forme :
+{chart_instruction} Dans ce cas, crée une variable `chart_data` sous cette forme :
 
 chart_data = {{
     "title": "Titre du graphique",
@@ -211,8 +226,14 @@ def _build_retry_prompt(
     dataset_summary: str,
     failed_code: str,
     error_message: str,
+    generate_chart: bool,
 ) -> str:
     """Construit le prompt de correction."""
+    chart_instruction = (
+        "- Comme des données CSV/Excel sont présentes, ajoute un graphique agrégé avec chart_data si possible."
+        if generate_chart
+        else ""
+    )
 
     return f"""
 Le code Python suivant a provoqué une erreur.
@@ -242,6 +263,8 @@ IMPORTANT :
 - Ne suppose pas que les fichiers ont les mêmes colonnes.
 - Utilise uniquement pandas et json.
 - Affiche le résultat avec print(...).
+- Garde le code sous 400 tokens, sans commentaires; n'imprime pas toutes les lignes ou le contenu intégral des documents.
+{chart_instruction}
 - Réponds uniquement avec du code Python.
 """
 
@@ -285,6 +308,7 @@ IMPORTANT :
 def analyze_dataset(
     question: str,
     df: pd.DataFrame,
+    generate_chart: bool = False,
 ) -> dict[str, str | None]:
     """
     Analyse un ou plusieurs datasets.
@@ -298,6 +322,10 @@ def analyze_dataset(
         DataFrame contenant les données.
         Pour plusieurs fichiers, __source_file identifie
         le fichier d'origine.
+
+    generate_chart:
+        Génère un graphique complémentaire quand des données
+        CSV/Excel sont présentes.
 
     Returns
     -------
@@ -351,11 +379,12 @@ def analyze_dataset(
                 "content": _build_first_prompt(
                     question,
                     dataset_summary,
+                    generate_chart,
                 ),
             }
         ],
         temperature=0.2,
-        max_tokens=2048,
+        max_tokens=768,
     )
 
     generated_code = _extract_python_code(
@@ -410,11 +439,12 @@ def analyze_dataset(
                         dataset_summary,
                         generated_code,
                         error_message,
+                        generate_chart,
                     ),
                 }
             ],
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=768,
         )
 
         corrected_code = _extract_python_code(
