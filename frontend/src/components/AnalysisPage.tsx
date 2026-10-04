@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { BarChart3, Database, FileText, Hash, MessageSquare } from 'lucide-react'
+import { BarChart3, ChevronDown, Database, FileDown, FileText, Hash, ImageDown, MessageSquare } from 'lucide-react'
 import { ChatWindow } from './ChatWindow'
 import { ChartRenderer } from './ChartRenderer'
 import { DataPreviewTable } from './DataPreviewTable'
+import { ShareControls } from './ShareControls'
 import { SuggestedQuestions } from './SuggestedQuestions'
 import type { ChartConfig, Message } from '../types'
 import type { DatasetPreview } from '../services/fileService'
-import { getSuggestions, type SuggestedQuestion } from '../services/analysisService'
+import { exportAnalysis, getSuggestions, type SuggestedQuestion } from '../services/analysisService'
 
 type Props = {
   datasets: DatasetPreview[]
@@ -25,6 +26,50 @@ const formatBytes = (size: number) => {
   if (size < 1024) return `${size} o`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} Ko`
   return `${(size / (1024 * 1024)).toFixed(1)} Mo`
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function exportChartPng() {
+  const svg = document.querySelector('.dashboard-grid .chart-card .chart-renderer svg')
+  if (!(svg instanceof SVGSVGElement)) throw new Error('Aucun graphique à exporter.')
+
+  const serializedSvg = new XMLSerializer().serializeToString(svg)
+  const imageUrl = URL.createObjectURL(new Blob([serializedSvg], { type: 'image/svg+xml;charset=utf-8' }))
+  try {
+    const image = new window.Image()
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('Le graphique n’a pas pu être converti en image.'))
+      image.src = imageUrl
+    })
+    const bounds = svg.getBoundingClientRect()
+    const width = Math.max(1, Math.round(svg.viewBox.baseVal.width || bounds.width))
+    const height = Math.max(1, Math.round(svg.viewBox.baseVal.height || bounds.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Le navigateur ne permet pas de créer cette image.')
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(image, 0, 0, width, height)
+    const png = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('La création du PNG a échoué.')), 'image/png')
+    })
+    saveBlob(png, 'graphique-analyse.png')
+  } finally {
+    URL.revokeObjectURL(imageUrl)
+  }
 }
 
 const documentSuggestions = [
@@ -50,10 +95,14 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
   const [suggestions, setSuggestions] = useState<SuggestedQuestion[]>([])
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [suggestionsUnavailable, setSuggestionsUnavailable] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const suggestionAbortRef = useRef<AbortController | null>(null)
   const datasetIds = datasets.map((dataset) => dataset.dataset_id)
   const datasetIdsKey = datasetIds.join(',')
   const hasAskedQuestion = Boolean(firstQuestion.trim()) || messages.some((message) => message.role === 'user')
+  const latestAnalysisId = [...messages].reverse().find((message) => message.role === 'assistant' && message.analysisId)?.analysisId
 
   useEffect(() => () => suggestionAbortRef.current?.abort(), [])
 
@@ -119,6 +168,30 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
       ? `Analyse de ${primary.filename}`
       : 'Analyse'
   const documentDatasets = datasets.filter((dataset) => /\.(pdf|docx?)$/i.test(dataset.filename))
+  const downloadAnalysis = async (format: 'pdf' | 'xlsx') => {
+    if (!latestAnalysisId) return
+    setExporting(true)
+    setExportError('')
+    try {
+      const result = await exportAnalysis(latestAnalysisId, format)
+      saveBlob(result.blob, result.filename)
+      setExportMenuOpen(false)
+    } catch {
+      setExportError('L’export n’a pas pu être téléchargé. Réessayez.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const downloadChart = async () => {
+    setExportError('')
+    try {
+      await exportChartPng()
+      setExportMenuOpen(false)
+    } catch {
+      setExportError('Le graphique n’a pas pu être exporté en PNG.')
+    }
+  }
 
   return (
     <div className="analysis-page">
@@ -133,6 +206,30 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
         </div>
         <span className="success-badge">● Dataset connecté</span>
       </div>
+      {latestAnalysisId && (
+        <div className="analysis-export">
+          <ShareControls analysisId={latestAnalysisId} />
+          <button
+            type="button"
+            className="analysis-export-trigger"
+            aria-expanded={exportMenuOpen}
+            onClick={() => setExportMenuOpen((open) => !open)}
+            disabled={exporting}
+          >
+            <FileDown size={15} />
+            {exporting ? 'Préparation…' : 'Exporter'}
+            <ChevronDown size={13} />
+          </button>
+          {exportMenuOpen && (
+            <div className="analysis-export-menu">
+              <button type="button" onClick={() => void downloadAnalysis('pdf')} disabled={exporting}>PDF</button>
+              <button type="button" onClick={() => void downloadAnalysis('xlsx')} disabled={exporting}>Excel</button>
+              {chart && <button type="button" onClick={() => void downloadChart()} disabled={exporting}><ImageDown size={14} /> PNG du graphique</button>}
+            </div>
+          )}
+          {exportError && <p className="analysis-export-error" role="alert">{exportError}</p>}
+        </div>
+      )}
 
       {documentDatasets.length > 0 && (
         <section className="document-analysis-card" aria-label="Analyse des documents">

@@ -109,10 +109,11 @@ def test_analysis_creates_and_reuses_conversation_and_history_groups_metadata(mo
         db.commit()
         user_id, dataset_id = user.id, dataset.id
 
+    combined_dataframe = pd.DataFrame({"region": ["Nord", "Sud"], "sales": [10, 20]})
     monkeypatch.setattr(
         analyses_api,
-        "_combine_datasets",
-        lambda _: pd.DataFrame({"region": ["Nord", "Sud"], "sales": [10, 20]}),
+        "_prepare_datasets_for_llm",
+        lambda _: (combined_dataframe, combined_dataframe.copy(), [], {"column_count": 0}),
     )
     received_history = []
 
@@ -156,7 +157,7 @@ def test_analysis_creates_and_reuses_conversation_and_history_groups_metadata(mo
             "code": "print('résultat')",
         }],
     ]
-    assert len(history.json()) == 2
-    assert {item["conversation_id"] for item in history.json()} == {conversation_id}
-    assert {item["conversation_title"] for item in history.json()} == {"Quel est le meilleur produit ?"}
-    assert all(item["conversation_dataset_ids"] == [dataset_id] for item in history.json())
+    assert len(history.json()["items"]) == 2
+    assert {item["conversation_id"] for item in history.json()["items"]} == {conversation_id}
+    assert {item["conversation_title"] for item in history.json()["items"]} == {"Quel est le meilleur produit ?"}
+    assert all(item["conversation_dataset_ids"] == [dataset_id] for item in history.json()["items"])

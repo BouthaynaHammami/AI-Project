@@ -35,6 +35,9 @@ export type HistoryEntry = {
 	conversationTitle: string | null
 	conversationMessages?: ConversationTurn[]
 	date: string
+	analysisId?: number
+	title?: string
+	isFavorite?: boolean
 }
 export type Message = { id: number; analysisId?: number; role: 'user' | 'assistant'; content: string; timestamp: string; chartConfig?: string | null; generatedCode?: string | null; codeExplanation?: string | null; codeRetried?: boolean; feedback?: Feedback | null }
 export type ChartType = 'bar' | 'line' | 'pie' | 'scatter'

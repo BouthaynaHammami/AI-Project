@@ -1,7 +1,13 @@
-import { AlertTriangle, BarChart3, Columns3, Rows3 } from 'lucide-react'
-import type { DataProfile as DataProfileType } from '../services/fileService'
+import { AlertTriangle, BarChart3, Columns3, Rows3, ShieldAlert } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { updatePiiPreferences, type DataProfile as DataProfileType, type PiiPreference, type PiiReport } from '../services/fileService'
 
-type Props = { profile: DataProfileType }
+type Props = {
+  profile?: DataProfileType | null
+  datasetId: number
+  piiReport: PiiReport
+  piiPreferences: Record<string, PiiPreference>
+}
 
 const formatValue = (value: unknown) => {
   if (value == null) return '—'
@@ -9,9 +15,62 @@ const formatValue = (value: unknown) => {
   return String(value)
 }
 
-export function DataProfile({ profile }: Props) {
+export function DataProfile({ profile, datasetId, piiReport, piiPreferences }: Props) {
+  const [preferences, setPreferences] = useState(piiPreferences)
+  const [savingColumn, setSavingColumn] = useState<string | null>(null)
+  const [preferenceError, setPreferenceError] = useState('')
+
+  useEffect(() => setPreferences(piiPreferences), [piiPreferences])
+
+  const savePreference = async (column: string, preference: PiiPreference) => {
+    const next = { ...preferences, [column]: preference }
+    setSavingColumn(column)
+    setPreferenceError('')
+    try {
+      const saved = await updatePiiPreferences(datasetId, next)
+      setPreferences(saved)
+    } catch {
+      setPreferenceError('La préférence de confidentialité n’a pas pu être enregistrée.')
+    } finally {
+      setSavingColumn(null)
+    }
+  }
+
   return (
     <section className="data-profile" aria-label="Profil de qualité des données">
+      {piiReport.column_count > 0 && (
+        <div className="pii-report-banner" role="region" aria-label="Données personnelles détectées">
+          <div className="pii-report-heading">
+            <ShieldAlert size={17} aria-hidden="true" />
+            <strong>{piiReport.column_count} colonne{piiReport.column_count > 1 ? 's' : ''} sensible{piiReport.column_count > 1 ? 's' : ''} détectée{piiReport.column_count > 1 ? 's' : ''}</strong>
+          </div>
+          <p>Par défaut, les valeurs détectées sont masquées avant tout envoi à l’IA.</p>
+          <div className="pii-report-columns">
+            {piiReport.columns.map((column) => (
+              <div className="pii-report-column" key={`${column.position}-${column.name}`}>
+                <span>
+                  <strong>{column.name}</strong>
+                  <small>{column.category} · {column.values_touched.toLocaleString('fr-FR')} valeur{column.values_touched > 1 ? 's' : ''} · confiance {column.confidence === 'high' ? 'élevée' : 'moyenne'}</small>
+                </span>
+                <label>
+                  <span className="sr-only">Action pour {column.name}</span>
+                  <select
+                    value={preferences[column.name] ?? 'mask'}
+                    disabled={savingColumn !== null}
+                    onChange={(event) => void savePreference(column.name, event.target.value as PiiPreference)}
+                  >
+                    <option value="exclude">Exclure de l’analyse</option>
+                    <option value="mask">Masquer avant l’IA</option>
+                    <option value="allow">Autoriser l’envoi à l’IA</option>
+                  </select>
+                </label>
+              </div>
+            ))}
+          </div>
+          {preferenceError && <p className="pii-preference-error" role="alert">{preferenceError}</p>}
+        </div>
+      )}
+      {profile && <>
       <div className="data-profile-heading">
         <div>
           <span className="section-kicker">QUALITÉ DES DONNÉES</span>
@@ -104,6 +163,7 @@ export function DataProfile({ profile }: Props) {
           </tbody>
         </table>
       </div>
+      </>}
     </section>
   )
 }

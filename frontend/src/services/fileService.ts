@@ -29,6 +29,22 @@ export type DataProfile = {
   alerts: ProfileAlert[]
 }
 
+export type PiiCategoryReport = {
+  name: string
+  position: number
+  category: string
+  values_touched: number
+  confidence: 'high' | 'medium'
+}
+
+export type PiiReport = {
+  columns: PiiCategoryReport[]
+  column_count: number
+  values_touched: number
+}
+
+export type PiiPreference = 'exclude' | 'mask' | 'allow'
+
 export type DatasetPreview = {
   dataset_id: number
   id: number
@@ -40,6 +56,8 @@ export type DatasetPreview = {
   column_names: string[]
   preview: Record<string, unknown>[]
   profile?: DataProfile | null
+  pii_report: PiiReport
+  pii_preferences: Record<string, PiiPreference>
 }
 
 // Upload multiple files separately in one request
@@ -82,4 +100,16 @@ export async function getDatasetHistory() {
   )
 
   return data
+}
+
+export async function deleteDataset(datasetId: number, cascade = false) {
+  await api.delete(`/files/${datasetId}`, { params: { cascade } })
+}
+
+export async function updatePiiPreferences(datasetId: number, preferences: Record<string, PiiPreference>) {
+  const { data } = await api.put<{ dataset_id: number; preferences: Record<string, PiiPreference> }>(
+    `/files/${datasetId}/pii-preferences`,
+    { preferences },
+  )
+  return data.preferences
 }

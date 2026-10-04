@@ -31,7 +31,7 @@ def test_analyze_dataset_returns_the_successfully_retried_code(monkeypatch):
         calls.append(code)
         if code == "print('initial')":
             raise ValueError("synthetic failure")
-        return "total=42", None
+        return "total=42", None, None
 
     monkeypatch.setattr(ai_service, "_execute_code", fake_execute)
 
@@ -49,6 +49,21 @@ def test_summary_parser_supports_legacy_plain_text():
 
     assert answer == "Réponse simple en français."
     assert explanation == ""
+
+
+def test_execute_code_captures_json_safe_result_table_up_to_one_thousand_rows():
+    dataframe = pd.DataFrame({
+        "value": range(1001),
+        "optional": [None] * 1000 + [float("nan")],
+    })
+
+    _, _, result_table = ai_service._execute_code("result_table = df", dataframe)
+    serialized = ai_service._serialize_result_table(result_table)
+
+    assert serialized is not None
+    assert serialized["columns"] == ["value", "optional"]
+    assert len(serialized["rows"]) == 1000
+    assert serialized["rows"][0] == [0, None]
 
 
 def test_chart_validator_accepts_multiple_series_and_limits_points():
@@ -153,7 +168,7 @@ def test_analyze_dataset_does_not_create_a_chart_from_unrelated_column_values(mo
 
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setattr(ai_service, "Groq", FakeGroq)
-    monkeypatch.setattr(ai_service, "_execute_code", lambda *_args: ("Total : 300", None))
+    monkeypatch.setattr(ai_service, "_execute_code", lambda *_args: ("Total : 300", None, None))
 
     result = ai_service.analyze_dataset(
         "Quel est le total des ventes ?",

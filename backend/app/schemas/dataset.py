@@ -1,7 +1,16 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PiiColumnPreferenceUpdate(BaseModel):
+    preferences: dict[str, Literal["exclude", "mask", "allow"]] = Field(default_factory=dict)
+
+
+class PiiColumnPreferenceResponse(BaseModel):
+    dataset_id: int
+    preferences: dict[str, Literal["exclude", "mask", "allow"]]
 
 
 class DatasetResponse(BaseModel):
@@ -26,6 +35,8 @@ class DatasetPreviewResponse(BaseModel):
     column_names: list[str]
     preview: list[dict]
     profile: dict[str, Any] | None = None
+    pii_report: dict[str, Any] = Field(default_factory=lambda: {"columns": [], "column_count": 0, "values_touched": 0})
+    pii_preferences: dict[str, Literal["exclude", "mask", "allow"]] = Field(default_factory=dict)
 
 
 class DatasetUploadResponse(DatasetPreviewResponse):
@@ -36,5 +47,6 @@ class DatasetHistoryResponse(BaseModel):
     id: int
     filename: str
     created_at: datetime
+    deleted_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)

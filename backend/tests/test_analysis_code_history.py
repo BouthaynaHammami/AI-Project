@@ -95,6 +95,6 @@ def test_analysis_code_and_explanation_are_exposed_and_restored_from_history(mon
     assert response.json()["code_retried"] is True
     assert response.json()["code_explanation"] == "Le code additionne les montants et affiche le total."
     assert history.status_code == 200
-    assert history.json()[0]["generated_code"] == executed_code
-    assert history.json()[0]["code_retried"] is True
-    assert history.json()[0]["code_explanation"] == "Le code additionne les montants et affiche le total."
+    assert history.json()["items"][0]["generated_code"] == executed_code
+    assert history.json()["items"][0]["code_retried"] is True
+    assert history.json()["items"][0]["code_explanation"] == "Le code additionne les montants et affiche le total."

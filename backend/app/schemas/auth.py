@@ -55,6 +55,9 @@ class UserPublic(BaseModel):
     profile_photo: str | None = None
     created_at: datetime
     email_change_pending: bool = False
+    role: str = "user"
+    monthly_quota: int = 50
+    is_active: bool = True
 
     model_config = ConfigDict(from_attributes=True)
 

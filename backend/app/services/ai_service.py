@@ -23,10 +23,23 @@ from typing import Any
 import pandas as pd
 from groq import Groq
 
+from app.core.groq_limit import acquire_groq_slot
+from app.services.pii_service import sanitize_text
+
 logger = logging.getLogger(__name__)
 
 _MODEL = "qwen/qwen3.8-27b"
 _MAX_PREVIEW_ROWS = 10
+
+
+def _create_completion(client: Groq, usage_totals: dict[str, int], **kwargs: Any):
+    acquire_groq_slot()
+    response = client.chat.completions.create(**kwargs)
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        usage_totals["tokens_in"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+        usage_totals["tokens_out"] += int(getattr(usage, "completion_tokens", 0) or 0)
+    return response
 
 
 # ============================================================================
@@ -41,11 +54,11 @@ def _build_dataset_summary(df: pd.DataFrame) -> str:
     source_info = ""
 
     if "__source_file" in df.columns:
-        source_counts = (
-            df["__source_file"]
-            .value_counts(dropna=False)
-            .to_dict()
-        )
+        source_counts = df["__source_file"].value_counts(dropna=False).to_dict()
+        source_counts = {
+            sanitize_text(str(filename)): int(count)
+            for filename, count in source_counts.items()
+        }
 
         source_info = (
             "\nFICHIERS SOURCES :\n"
@@ -110,7 +123,7 @@ def _extract_python_code(text: str) -> str:
 def _execute_code(
     code: str,
     df: pd.DataFrame,
-) -> tuple[str, dict[str, Any] | None]:
+) -> tuple[str, dict[str, Any] | None, pd.DataFrame | None]:
     """
     Exécute le code généré par le LLM.
 
@@ -134,11 +147,16 @@ def _execute_code(
     output = buffer.getvalue().strip()
 
     chart_data = namespace.get("chart_data")
+    result_table = namespace.get("result_table")
 
     if chart_data and not isinstance(chart_data, dict):
         chart_data = None
+    if not isinstance(result_table, pd.DataFrame):
+        result_table = None
+    elif len(result_table) > 1000:
+        result_table = result_table.head(1000).copy()
 
-    return output, chart_data
+    return output, chart_data, result_table
 
 
 # ============================================================================
@@ -202,6 +220,8 @@ INSTRUCTIONS STRICTES :
    prends en compte TOUS les fichiers disponibles.
 
 8. Affiche une réponse courte à la question avec `print(...)`. Ne réimprime pas toutes les lignes ni le contenu intégral des documents.
+
+8a. Si tu produis un tableau comme résultat, affecte le DataFrame final à `result_table` (maximum 1 000 lignes).
 
 {chart_instruction} Dans ce cas, crée une variable `chart_data` sous cette forme :
 
@@ -279,6 +299,7 @@ IMPORTANT :
 - Ne suppose pas que les fichiers ont les mêmes colonnes.
 - Utilise uniquement pandas et json.
 - Affiche le résultat avec print(...).
+- Si tu produis un tableau, affecte le DataFrame final à `result_table` (maximum 1 000 lignes).
 - Garde le code sous 400 tokens, sans commentaires; n'imprime pas toutes les lignes ou le contenu intégral des documents.
 {chart_instruction}
 - Si tu crées un graphique, utilise la forme chart_data suivante : {{"type":"bar|line|pie|scatter","title":"...","x_label":"...","y_label":"...","labels":["..."],"series":[{{"name":"...","values":[1]}}]}}.
@@ -376,9 +397,10 @@ def _resolve_follow_up(
     client: Groq,
     question: str,
     history: list[dict[str, str]],
+    usage_totals: dict[str, int] | None = None,
 ) -> tuple[str | None, str | None]:
     """Réécrit une question contextuelle en question autonome ou demande une précision."""
-    response = client.chat.completions.create(
+    response = _create_completion(client, usage_totals if usage_totals is not None else {"tokens_in": 0, "tokens_out": 0},
         model=_MODEL,
         messages=[{
             "role": "user",
@@ -426,6 +448,9 @@ def analyze_dataset(
     df: pd.DataFrame,
     generate_chart: bool = False,
     conversation_history: list[dict[str, str]] | None = None,
+    prompt_dataframe: pd.DataFrame | None = None,
+    sensitive_values: list[str] | None = None,
+    pii_column_count: int = 0,
 ) -> dict[str, Any]:
     """
     Analyse un ou plusieurs datasets.
@@ -466,28 +491,44 @@ def analyze_dataset(
         )
 
     client = Groq(api_key=api_key)
-    conversation_history = _bounded_conversation_history(conversation_history or [])
+    usage_totals = {"tokens_in": 0, "tokens_out": 0}
+    safe_question = sanitize_text(question, sensitive_values)
+    safe_history = [
+        {
+            key: sanitize_text(str(value), sensitive_values)
+            for key, value in exchange.items()
+        }
+        for exchange in (conversation_history or [])
+    ]
+    conversation_history = _bounded_conversation_history(safe_history)
     resolved_question = question
     if conversation_history:
         resolved_question, clarification = _resolve_follow_up(
             client,
-            resolved_question,
+            sanitize_text(resolved_question, sensitive_values),
             conversation_history,
+            usage_totals,
         )
         if resolved_question is None:
             return {
-                "answer": clarification or "Pouvez-vous préciser votre question ?",
+                "answer": sanitize_text(
+                    clarification or "Pouvez-vous préciser votre question ?",
+                    sensitive_values,
+                ),
                 "chart_config": None,
                 "code": None,
                 "retried": False,
                 "code_explanation": None,
+                "tokens_in": usage_totals["tokens_in"],
+                "tokens_out": usage_totals["tokens_out"],
+                "model": _MODEL,
             }
 
     # ------------------------------------------------------------------------
     # DATASET SUMMARY
     # ------------------------------------------------------------------------
 
-    dataset_summary = _build_dataset_summary(df)
+    dataset_summary = _build_dataset_summary(prompt_dataframe if prompt_dataframe is not None else df)
 
     logger.info(
         "Analyse IA démarrée : %s lignes, %s colonnes",
@@ -500,17 +541,19 @@ def analyze_dataset(
     # ------------------------------------------------------------------------
 
     logger.info(
-        "Groq — envoi du premier prompt : %r",
-        question[:100],
+        "Groq prompt prepared: rows=%s columns=%s pii_columns=%s",
+        len(df),
+        len(df.columns),
+        pii_column_count,
     )
 
-    first_response = client.chat.completions.create(
+    first_response = _create_completion(client, usage_totals,
         model=_MODEL,
         messages=[
             {
                 "role": "user",
                 "content": _build_first_prompt(
-                    resolved_question,
+                    sanitize_text(resolved_question, sensitive_values),
                     dataset_summary,
                     generate_chart,
                     conversation_history,
@@ -525,52 +568,48 @@ def analyze_dataset(
         first_response.choices[0].message.content or ""
     )
 
-    logger.debug(
-        "Code généré :\n%s",
-        generated_code,
-    )
-
     # ------------------------------------------------------------------------
     # STEP 2 — EXECUTE CODE
     # ------------------------------------------------------------------------
 
     code_output = ""
     chart_data: dict[str, Any] | None = None
+    result_table: pd.DataFrame | None = None
     executed_code = generated_code
     code_retried = False
 
     try:
-        code_output, chart_data = _execute_code(executed_code, df)
+        code_output, chart_data, result_table = _execute_code(executed_code, df)
 
         logger.info(
-            "Exécution réussie : %r",
-            code_output[:300],
+            "Local code execution succeeded: output_chars=%s",
+            len(code_output),
         )
 
     except Exception as exec_error:
 
         error_message = (
-            f"{type(exec_error).__name__}: {exec_error}"
+            f"{type(exec_error).__name__}: {sanitize_text(str(exec_error), sensitive_values)}"
         )
 
         logger.warning(
-            "Erreur d'exécution — retry : %s",
-            error_message,
+            "Local execution failed; retrying: error_type=%s",
+            type(exec_error).__name__,
         )
 
         # --------------------------------------------------------------------
         # RETRY
         # --------------------------------------------------------------------
 
-        retry_response = client.chat.completions.create(
+        retry_response = _create_completion(client, usage_totals,
             model=_MODEL,
             messages=[
                 {
                     "role": "user",
                     "content": _build_retry_prompt(
-                        question,
+                        safe_question,
                         dataset_summary,
-                        generated_code,
+                        sanitize_text(generated_code, sensitive_values),
                         error_message,
                         generate_chart,
                         conversation_history,
@@ -585,13 +624,8 @@ def analyze_dataset(
             retry_response.choices[0].message.content or ""
         )
 
-        logger.debug(
-            "Code corrigé :\n%s",
-            corrected_code,
-        )
-
         try:
-            code_output, chart_data = _execute_code(
+            code_output, chart_data, result_table = _execute_code(
                 corrected_code,
                 df,
             )
@@ -599,15 +633,15 @@ def analyze_dataset(
             code_retried = True
 
             logger.info(
-                "Retry réussi : %r",
-                code_output[:300],
+                "Local retry succeeded: output_chars=%s",
+                len(code_output),
             )
 
         except Exception as retry_error:
 
             logger.error(
                 "Retry échoué : %s",
-                retry_error,
+                type(retry_error).__name__,
             )
 
             return {
@@ -620,6 +654,9 @@ def analyze_dataset(
                 "code": None,
                 "retried": True,
                 "code_explanation": None,
+                "tokens_in": usage_totals["tokens_in"],
+                "tokens_out": usage_totals["tokens_out"],
+                "model": _MODEL,
             }
 
     # ------------------------------------------------------------------------
@@ -632,14 +669,14 @@ def analyze_dataset(
             "Le calcul a peut-être été effectué sans print.)"
         )
 
-    summary_response = client.chat.completions.create(
+    summary_response = _create_completion(client, usage_totals,
         model=_MODEL,
         messages=[
             {
                 "role": "user",
                 "content": _build_summary_prompt(
-                    question,
-                    code_output,
+                    safe_question,
+                    sanitize_text(code_output, sensitive_values),
                 ),
             }
         ],
@@ -651,6 +688,8 @@ def analyze_dataset(
         summary_response.choices[0].message.content or ""
     ).strip()
     answer, code_explanation = _parse_summary(summary_text)
+    answer = sanitize_text(answer, sensitive_values)
+    code_explanation = sanitize_text(code_explanation, sensitive_values)
 
     # ------------------------------------------------------------------------
     # STEP 4 — CHART
@@ -681,6 +720,48 @@ def analyze_dataset(
         "code": executed_code,
         "retried": code_retried,
         "code_explanation": code_explanation,
+        "result_table": _serialize_result_table(result_table),
+        "tokens_in": usage_totals["tokens_in"],
+        "tokens_out": usage_totals["tokens_out"],
+        "model": _MODEL,
+    }
+
+
+def _serialize_result_table(result_table: pd.DataFrame | None) -> dict[str, Any] | None:
+    """Convertit le tableau en données JSON sûres, limitées à 1 000 lignes."""
+    if result_table is None:
+        return None
+
+    def json_value(value: Any) -> Any:
+        if hasattr(value, "item"):
+            value = value.item()
+        if value is None:
+            return None
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {str(key): json_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_value(item) for item in value]
+        try:
+            missing = pd.isna(value)
+            if isinstance(missing, bool) and missing:
+                return None
+        except (TypeError, ValueError):
+            pass
+        return str(value)
+
+    limited = result_table.head(1000)
+    return {
+        "columns": [str(column) for column in limited.columns],
+        "rows": [
+            [json_value(value) for value in row]
+            for row in limited.itertuples(index=False, name=None)
+        ],
     }
 
 

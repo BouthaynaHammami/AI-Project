@@ -1,15 +1,19 @@
 import logging
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Literal
 
 import pandas as pd
 from groq import APIStatusError, RateLimitError
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.groq_limit import GroqGlobalLimitExceeded
+from app.core.rate_limit import authenticated_user_rate_key, limiter
 from app.core.security import get_current_user
 from app.models.analysis import Analysis
 from app.models.conversation import Conversation
@@ -20,16 +24,27 @@ from app.schemas.analysis import (
     AnalysisAskResponse,
     AnalysisCreate,
     AnalysisFeedbackStats,
+    AnalysisHistoryPage,
     AnalysisResponse,
     AnalysisSuggestionsResponse,
     FeedbackCreate,
     FeedbackResponse,
+    AnalysisUpdate,
 )
 from app.services.ai_service import analyze_dataset
+from app.services.export_service import (
+    build_pdf_export,
+    build_xlsx_export,
+    export_filename,
+    pdf_export_filename,
+)
 from app.services.file_service import read_file_as_dataframe
+from app.services.pii_service import detect_pii, prepare_dataframes
 from app.services.suggestion_service import build_data_context, get_suggestions
+from app.services.usage_service import add_usage_event, check_quota
 
 logger = logging.getLogger(__name__)
+RESTORE_WINDOW_SECONDS = 30
 
 router = APIRouter(
     prefix="/analysis",
@@ -55,7 +70,7 @@ def _load_dataframe(dataset: Dataset) -> pd.DataFrame:
             detail=f"Could not read dataset file {dataset.filename}: {error}",
         ) from error
     except Exception as error:
-        logger.exception("Could not read dataset: %s", dataset.filename)
+        logger.error("Dataset read failed")
 
         raise HTTPException(
             status_code=500,
@@ -99,6 +114,55 @@ def _combine_datasets(
     return combined_df
 
 
+def _dataset_preferences(dataset: Dataset) -> dict[str, str]:
+    try:
+        preferences = json.loads(dataset.pii_preferences or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(preferences, dict):
+        return {}
+    return {
+        str(column): preference
+        for column, preference in preferences.items()
+        if preference in {"exclude", "mask", "allow"}
+    }
+
+
+def _prepare_datasets_for_llm(
+    datasets: list[Dataset],
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, Any]]:
+    execution_frames: list[pd.DataFrame] = []
+    prompt_frames: list[pd.DataFrame] = []
+    sensitive_values: list[str] = []
+    reports: list[dict[str, Any]] = []
+
+    for dataset in datasets:
+        original = _load_dataframe(dataset)
+        report = detect_pii(original)
+        execution, prompt, _, values = prepare_dataframes(
+            original,
+            report,
+            _dataset_preferences(dataset),
+        )
+        execution["__source_file"] = dataset.filename
+        prompt["__source_file"] = dataset.filename
+        execution_frames.append(execution)
+        prompt_frames.append(prompt)
+        sensitive_values.extend(values)
+        reports.append({
+            "dataset_id": dataset.id,
+            "column_count": report["column_count"],
+            "values_touched": report["values_touched"],
+        })
+
+    return (
+        pd.concat(execution_frames, ignore_index=True, sort=False),
+        pd.concat(prompt_frames, ignore_index=True, sort=False),
+        sensitive_values,
+        {"datasets": reports, "column_count": sum(item["column_count"] for item in reports)},
+    )
+
+
 @router.get("/suggestions", response_model=AnalysisSuggestionsResponse)
 def suggest_questions(
     dataset_ids: str,
@@ -134,18 +198,38 @@ def suggest_questions(
     frames = []
     file_columns = []
     for dataset in datasets:
-        dataframe = _load_dataframe(dataset).copy()
-        file_columns.append((dataset.filename, [str(column) for column in dataframe.columns]))
-        dataframe["__source_file"] = dataset.filename
-        frames.append(dataframe)
+        dataframe = _load_dataframe(dataset)
+        _, prompt_dataframe, _, _ = prepare_dataframes(
+            dataframe,
+            detect_pii(dataframe),
+            _dataset_preferences(dataset),
+        )
+        file_columns.append((dataset.filename, [str(column) for column in prompt_dataframe.columns]))
+        prompt_dataframe["__source_file"] = dataset.filename
+        frames.append(prompt_dataframe)
     dataframe = pd.concat(frames, ignore_index=True, sort=False)
     context = build_data_context(
         dataframe,
         [dataset.filename for dataset in datasets],
         file_columns=file_columns,
     )
+    suggestion_tokens_in = 0
+    suggestion_tokens_out = 0
+    suggestion_model: str | None = None
+
+    def record_suggestion_tokens(tokens_in: int, tokens_out: int, model: str) -> None:
+        nonlocal suggestion_tokens_in, suggestion_tokens_out, suggestion_model
+        suggestion_tokens_in += tokens_in
+        suggestion_tokens_out += tokens_out
+        suggestion_model = model
+
     try:
-        result = get_suggestions(context, current_user.id, refresh=refresh)
+        result = get_suggestions(
+            context,
+            current_user.id,
+            refresh=refresh,
+            usage_callback=record_suggestion_tokens,
+        )
     except ValueError as error:
         if str(error) == "refresh_too_soon":
             raise HTTPException(
@@ -154,11 +238,28 @@ def suggest_questions(
                 headers={"Retry-After": "10"},
             ) from error
         raise
+    except GroqGlobalLimitExceeded as error:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Le service IA est temporairement occupé. Réessayez dans {error.retry_after} secondes.",
+            headers={"Retry-After": str(error.retry_after)},
+        ) from error
+    add_usage_event(
+        db,
+        current_user.id,
+        "suggestion",
+        tokens_in=suggestion_tokens_in,
+        tokens_out=suggestion_tokens_out,
+        model=suggestion_model,
+    )
+    db.commit()
     return result.model_dump()
 
 
-@router.post("/ask", response_model=AnalysisAskResponse)
+@router.post("/ask", response_model=AnalysisAskResponse, dependencies=[Depends(check_quota)])
+@limiter.limit("5/minute", key_func=authenticated_user_rate_key)
 def ask_question(
+    request: Request,
     analysis: AnalysisCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -245,11 +346,11 @@ def ask_question(
 
     # ── Chargement et combinaison des fichiers ───────────────────────────
     try:
-        combined_df = _combine_datasets(datasets)
+        combined_df, prompt_df, sensitive_values, pii_counts = _prepare_datasets_for_llm(datasets)
     except HTTPException:
         raise
     except Exception as error:
-        logger.exception("Error while combining datasets")
+        logger.error("Dataset combination failed: dataset_count=%s", len(datasets))
         raise HTTPException(
             status_code=500,
             detail="Could not combine the selected datasets.",
@@ -262,10 +363,15 @@ def ask_question(
             combined_df,
             generate_chart=any(dataset.file_type.lower() in {"csv", "xls", "xlsx"} for dataset in datasets),
             conversation_history=conversation_history,
+            prompt_dataframe=prompt_df,
+            sensitive_values=sensitive_values,
+            pii_column_count=pii_counts["column_count"],
         )
 
     except RuntimeError as error:
-        logger.error("ai_service error: %s", error)
+        logger.error("AI service configuration error")
+        add_usage_event(db, current_user.id, "analysis", status="error")
+        db.commit()
 
         raise HTTPException(
             status_code=503,
@@ -273,14 +379,18 @@ def ask_question(
         ) from error
 
     except RateLimitError as error:
-        logger.warning("Groq generation limit reached: %s", error)
+        logger.warning("Groq generation limit reached")
+        add_usage_event(db, current_user.id, "analysis", status="error")
+        db.commit()
         raise HTTPException(
             status_code=503,
             detail="La limite de génération de l’IA est atteinte. Réessayez dans une minute.",
         ) from error
 
     except APIStatusError as error:
-        logger.exception("Groq API request failed with status %s", error.status_code)
+        logger.error("Groq API request failed: status=%s", error.status_code)
+        add_usage_event(db, current_user.id, "analysis", status="error")
+        db.commit()
         detail = (
             "Le document dépasse la limite de contexte du service IA. "
             "Le contenu envoyé a été réduit; réessayez."
@@ -289,8 +399,17 @@ def ask_question(
         )
         raise HTTPException(status_code=503, detail=detail) from error
 
+    except GroqGlobalLimitExceeded as error:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Le service IA est temporairement occupé. Réessayez dans {error.retry_after} secondes.",
+            headers={"Retry-After": str(error.retry_after)},
+        ) from error
+
     except Exception as error:
-        logger.exception("Unexpected error from ai_service")
+        logger.error("Unexpected AI service failure")
+        add_usage_event(db, current_user.id, "analysis", status="error")
+        db.commit()
 
         raise HTTPException(
             status_code=500,
@@ -302,6 +421,10 @@ def ask_question(
     generated_code = result.get("code")
     code_explanation = result.get("code_explanation")
     code_retried = bool(result.get("retried", False))
+    result_data = {
+        "dataset_ids": dataset_ids,
+        "result_table": result.get("result_table"),
+    }
 
     # ── Sauvegarde en DB ─────────────────────────────────────────────────
     #
@@ -329,7 +452,7 @@ def ask_question(
         question=question,
         answer=answer,
         result_type="text",
-        result_data=json.dumps({"dataset_ids": dataset_ids}),
+        result_data=json.dumps(result_data, ensure_ascii=False, allow_nan=False),
         chart_config=chart_config,
         generated_code=generated_code,
         code_explanation=code_explanation,
@@ -337,6 +460,14 @@ def ask_question(
     )
 
     db.add(record)
+    add_usage_event(
+        db,
+        current_user.id,
+        "analysis",
+        tokens_in=result.get("tokens_in", 0),
+        tokens_out=result.get("tokens_out", 0),
+        model=result.get("model"),
+    )
     db.commit()
     db.refresh(record)
 
@@ -355,68 +486,295 @@ def ask_question(
     }
 
 
-@router.get("/history", response_model=list[AnalysisResponse])
+def _analysis_history_item(analysis: Analysis, db: Session, current_user: User) -> AnalysisResponse:
+    feedback = db.query(Feedback).filter(
+        Feedback.analysis_id == analysis.id,
+        Feedback.user_id == current_user.id,
+    ).first()
+    conversation = db.get(Conversation, analysis.conversation_id) if analysis.conversation_id else None
+    return AnalysisResponse.model_validate(analysis).model_copy(update={
+        "conversation_title": conversation.title if conversation and conversation.user_id == current_user.id else None,
+        "conversation_dataset_ids": (
+            json.loads(conversation.dataset_ids)
+            if conversation and conversation.user_id == current_user.id
+            else []
+        ),
+        "feedback": FeedbackResponse.model_validate(feedback) if feedback else None,
+    })
+
+
+@router.get("/history", response_model=AnalysisHistoryPage)
 def get_history(
+    q: str | None = Query(default=None, max_length=200),
+    favorite: bool | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Retourne l'historique des analyses de l'utilisateur."""
-    analyses = (
+    """Return a user's active analysis history with search and pagination."""
+    query = db.query(Analysis).filter(
+        Analysis.user_id == current_user.id,
+        Analysis.deleted_at.is_(None),
+    )
+    if favorite is True:
+        query = query.filter(Analysis.is_favorite.is_(True))
+    if q and q.strip():
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        query = query.filter(
+            Analysis.question.ilike(pattern, escape="\\")
+            | Analysis.answer.ilike(pattern, escape="\\")
+            | Analysis.title.ilike(pattern, escape="\\")
+        )
+    total = query.count()
+    analyses = query.order_by(Analysis.created_at.desc()).offset(offset).limit(limit).all()
+    return AnalysisHistoryPage(
+        items=[_analysis_history_item(analysis, db, current_user) for analysis in analyses],
+        total=total,
+        has_more=offset + len(analyses) < total,
+    )
+
+
+@router.patch("/{analysis_id}", response_model=AnalysisResponse)
+def update_analysis(
+    analysis_id: int,
+    payload: AnalysisUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    analysis = db.query(Analysis).filter(
+        Analysis.id == analysis_id,
+        Analysis.user_id == current_user.id,
+        Analysis.deleted_at.is_(None),
+    ).first()
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analyse introuvable.")
+    changes = payload.model_dump(exclude_unset=True)
+    if "title" in changes:
+        analysis.title = changes["title"] or None
+    if "is_favorite" in changes:
+        analysis.is_favorite = changes["is_favorite"]
+    db.commit()
+    db.refresh(analysis)
+    return _analysis_history_item(analysis, db, current_user)
+
+
+@router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    analysis = db.query(Analysis).filter(
+        Analysis.id == analysis_id,
+        Analysis.user_id == current_user.id,
+        Analysis.deleted_at.is_(None),
+    ).first()
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analyse introuvable.")
+    deleted_at = datetime.now(timezone.utc)
+    affected = [analysis]
+    if analysis.conversation_id is not None:
+        affected = (
+            db.query(Analysis)
+            .filter(
+                Analysis.conversation_id == analysis.conversation_id,
+                Analysis.user_id == current_user.id,
+                Analysis.deleted_at.is_(None),
+            )
+            .all()
+        )
+    for item in affected:
+        item.deleted_at = deleted_at
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{analysis_id}/restore", response_model=AnalysisResponse)
+def restore_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    analysis = db.query(Analysis).filter(
+        Analysis.id == analysis_id,
+        Analysis.user_id == current_user.id,
+        Analysis.deleted_at.is_not(None),
+    ).first()
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analyse supprimée introuvable.")
+    deleted_at = analysis.deleted_at
+    if deleted_at.tzinfo is None:
+        deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - deleted_at > timedelta(seconds=RESTORE_WINDOW_SECONDS):
+        raise HTTPException(status_code=404, detail="Le délai de restauration est dépassé.")
+    affected = [analysis]
+    if analysis.conversation_id is not None:
+        affected = (
+            db.query(Analysis)
+            .filter(
+                Analysis.conversation_id == analysis.conversation_id,
+                Analysis.user_id == current_user.id,
+                Analysis.deleted_at == analysis.deleted_at,
+            )
+            .all()
+        )
+    for item in affected:
+        item.deleted_at = None
+    db.commit()
+    db.refresh(analysis)
+    return _analysis_history_item(analysis, db, current_user)
+
+
+@router.get("/{analysis_id}/export")
+def export_analysis(
+    analysis_id: int,
+    file_format: Literal["pdf", "xlsx"] = Query(alias="format"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Exporte une analyse existante sans relancer son traitement."""
+    analysis = (
         db.query(Analysis)
-        .filter(Analysis.user_id == current_user.id)
-        .order_by(Analysis.created_at.desc())
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+            Analysis.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analyse introuvable.")
+
+    try:
+        stored_result = json.loads(analysis.result_data or "{}")
+    except (TypeError, json.JSONDecodeError):
+        stored_result = {}
+    if not isinstance(stored_result, dict):
+        stored_result = {}
+    dataset_ids = stored_result.get("dataset_ids", [analysis.dataset_id])
+    if not isinstance(dataset_ids, list):
+        dataset_ids = [analysis.dataset_id]
+    dataset_ids = [value for value in dataset_ids if isinstance(value, int) and not isinstance(value, bool)]
+    if not dataset_ids:
+        dataset_ids = [analysis.dataset_id]
+    datasets = (
+        db.query(Dataset)
+        .filter(Dataset.id.in_(dataset_ids), Dataset.user_id == current_user.id)
         .all()
     )
-    analysis_ids = [analysis.id for analysis in analyses]
-    feedback_by_analysis = {}
-    if analysis_ids:
-        feedback_by_analysis = {
-            feedback.analysis_id: feedback
-            for feedback in db.query(Feedback)
-            .filter(
-                Feedback.user_id == current_user.id,
-                Feedback.analysis_id.in_(analysis_ids),
+    filenames_by_id = {dataset.id: dataset.filename for dataset in datasets}
+    source_files = [filenames_by_id[dataset_id] for dataset_id in dataset_ids if dataset_id in filenames_by_id]
+    try:
+        chart_config = json.loads(analysis.chart_config) if analysis.chart_config else None
+    except json.JSONDecodeError:
+        chart_config = None
+
+    if file_format == "xlsx":
+        content = build_xlsx_export(
+            question=analysis.question,
+            answer=analysis.answer,
+            created_at=analysis.created_at,
+            source_files=source_files,
+            result_table=stored_result.get("result_table"),
+            chart_config=chart_config,
+        )
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = export_filename(analysis.id, file_format)
+    else:
+        pdf_analyses = [analysis]
+        if analysis.conversation_id is not None:
+            pdf_analyses = (
+                db.query(Analysis)
+                .filter(
+                    Analysis.conversation_id == analysis.conversation_id,
+                    Analysis.user_id == current_user.id,
+                    Analysis.deleted_at.is_(None),
+                )
+                .order_by(Analysis.created_at.asc(), Analysis.id.asc())
+                .all()
             )
-            .all()
-        }
-    conversation_ids = list({
-        analysis.conversation_id
-        for analysis in analyses
-        if analysis.conversation_id is not None
-    })
-    conversations_by_id = {}
-    if conversation_ids:
-        conversations_by_id = {
-            conversation.id: conversation
-            for conversation in db.query(Conversation)
-            .filter(
-                Conversation.user_id == current_user.id,
-                Conversation.id.in_(conversation_ids),
-            )
-            .all()
-        }
-    return [
-        AnalysisResponse.model_validate(analysis).model_copy(
-            update={
-                "conversation_title": (
-                    conversations_by_id[analysis.conversation_id].title
-                    if analysis.conversation_id in conversations_by_id
-                    else None
-                ),
-                "conversation_dataset_ids": (
-                    json.loads(conversations_by_id[analysis.conversation_id].dataset_ids)
-                    if analysis.conversation_id in conversations_by_id
-                    else []
-                ),
-                "feedback": (
-                    FeedbackResponse.model_validate(feedback_by_analysis[analysis.id])
-                    if analysis.id in feedback_by_analysis
+
+        pdf_turns = []
+        pdf_dataset_ids = list(dataset_ids)
+        for conversation_analysis in pdf_analyses:
+            try:
+                turn_data = json.loads(conversation_analysis.result_data or "{}")
+            except (TypeError, json.JSONDecodeError):
+                turn_data = {}
+            if not isinstance(turn_data, dict):
+                turn_data = {}
+            turn_dataset_ids = turn_data.get("dataset_ids", [])
+            if isinstance(turn_dataset_ids, list):
+                pdf_dataset_ids.extend(
+                    dataset_id
+                    for dataset_id in turn_dataset_ids
+                    if isinstance(dataset_id, int) and not isinstance(dataset_id, bool)
+                )
+            try:
+                turn_chart = (
+                    json.loads(conversation_analysis.chart_config)
+                    if conversation_analysis.chart_config
                     else None
                 )
-            }
+            except json.JSONDecodeError:
+                turn_chart = None
+            pdf_turns.append({
+                "question": conversation_analysis.question,
+                "answer": conversation_analysis.answer,
+                "created_at": conversation_analysis.created_at,
+                "result_table": turn_data.get("result_table"),
+                "chart_config": turn_chart,
+            })
+
+        pdf_dataset_ids = list(dict.fromkeys(pdf_dataset_ids))
+        pdf_datasets = (
+            db.query(Dataset)
+            .filter(
+                Dataset.id.in_(pdf_dataset_ids),
+                Dataset.user_id == current_user.id,
+            )
+            .all()
         )
-        for analysis in analyses
-    ]
+        pdf_source_files_by_id = {dataset.id: dataset.filename for dataset in pdf_datasets}
+        pdf_source_files = [
+            pdf_source_files_by_id[dataset_id]
+            for dataset_id in pdf_dataset_ids
+            if dataset_id in pdf_source_files_by_id
+        ]
+        primary_question = pdf_turns[0]["question"] if pdf_turns else analysis.question
+        content = build_pdf_export(
+            question=primary_question,
+            answer=analysis.answer,
+            created_at=analysis.created_at,
+            source_files=pdf_source_files,
+            result_table=stored_result.get("result_table"),
+            chart_config=chart_config,
+            conversation_turns=pdf_turns,
+        )
+        media_type = "application/pdf"
+        conversation_analysis_ids = [item.id for item in pdf_analyses]
+        existing_questions_query = db.query(Analysis.question).filter(
+            Analysis.user_id == current_user.id,
+            Analysis.id.notin_(conversation_analysis_ids),
+        )
+        existing_questions = existing_questions_query.all()
+        filename = pdf_export_filename(
+            primary_question,
+            analysis.id,
+            unique=any(
+                pdf_export_filename(existing[0], analysis.id).casefold()
+                == pdf_export_filename(primary_question, analysis.id).casefold()
+                for existing in existing_questions
+            ),
+        )
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/{analysis_id}/feedback", response_model=FeedbackResponse)
@@ -429,7 +787,11 @@ def save_feedback(
     """Crée ou remplace le vote de l'utilisateur pour une analyse qui lui appartient."""
     analysis = (
         db.query(Analysis)
-        .filter(Analysis.id == analysis_id, Analysis.user_id == current_user.id)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+            Analysis.deleted_at.is_(None),
+        )
         .first()
     )
     if analysis is None:
@@ -485,7 +847,11 @@ def delete_feedback(
     """Annule le vote de l'utilisateur pour une analyse qui lui appartient."""
     analysis = (
         db.query(Analysis)
-        .filter(Analysis.id == analysis_id, Analysis.user_id == current_user.id)
+        .filter(
+            Analysis.id == analysis_id,
+            Analysis.user_id == current_user.id,
+            Analysis.deleted_at.is_(None),
+        )
         .first()
     )
     if analysis is None:

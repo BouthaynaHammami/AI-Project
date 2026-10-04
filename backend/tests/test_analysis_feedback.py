@@ -146,7 +146,7 @@ def test_vote_is_replaced_and_included_in_history_and_stats():
     assert replaced.status_code == 200
     assert replaced.json()["id"] == first.json()["id"]
     assert replaced.json()["rating"] == 1
-    assert history.json()[0]["feedback"]["rating"] == 1
+    assert history.json()["items"][0]["feedback"]["rating"] == 1
     assert stats.json() == {
         "like_rate": 100.0,
         "total_votes": 1,
@@ -171,8 +171,8 @@ def test_feedback_can_be_deleted_and_stats_include_recent_negative_questions():
     assert stats.json()["like_rate"] == 0.0
     assert stats.json()["total_votes"] == 1
     assert stats.json()["recent_negative_questions"][0]["question"] == "Quel est le total des ventes ?"
-    assert history_before_delete.json()[0]["feedback"]["comment"] == "Ne répond pas à la question"
+    assert history_before_delete.json()["items"][0]["feedback"]["comment"] == "Ne répond pas à la question"
     assert deleted.status_code == 204
-    assert history_after_delete.json()[0]["feedback"] is None
+    assert history_after_delete.json()["items"][0]["feedback"] is None
     with TestSession() as db:
         assert db.query(Feedback).filter_by(analysis_id=analysis_id, user_id=user_id).count() == 0

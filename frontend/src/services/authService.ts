@@ -8,6 +8,9 @@ export type Profile = {
   profile_photo: string | null
   created_at: string
   email_change_pending?: boolean
+  role: 'user' | 'admin'
+  monthly_quota: number
+  is_active: boolean
 }
 export type Credentials = { email: string; password: string }
 export type SignupPayload = Credentials & { name: string }

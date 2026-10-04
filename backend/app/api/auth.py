@@ -152,6 +152,8 @@ def login(request: Request, login_data: UserLogin, db: Session = Depends(get_db)
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Adresse email ou mot de passe incorrect.",
         )
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="ACCOUNT_DISABLED")
     if not user.is_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

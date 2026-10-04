@@ -7,12 +7,15 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from collections import Counter
 from datetime import date, datetime
 from typing import Any, Literal
 
 import pandas as pd
 from groq import Groq
+
+from app.core.groq_limit import GroqGlobalLimitExceeded, acquire_groq_slot
 from pydantic import BaseModel, Field, ValidationError
 
 from app.services.ai_service import _MODEL
@@ -508,7 +511,11 @@ def _validate_suggestions(raw: str, context: dict[str, Any]) -> list[Suggestion]
     return results[:6]
 
 
-def _call_groq(context: dict[str, Any], language: str) -> list[Suggestion] | None:
+def _call_groq(
+    context: dict[str, Any],
+    language: str,
+    usage_callback: Callable[[int, int, str], None] | None = None,
+) -> list[Suggestion] | None:
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         return None
@@ -528,14 +535,24 @@ RÈGLES STRICTES :
 Réponds UNIQUEMENT avec ce JSON, sans texte autour :
 {{"suggestions":[{{"question":"...","category":"classement|evolution|comparaison|repartition|qualite|synthese","columns":["col1","col2"],"chart":true}}]}}"""
     try:
+        acquire_groq_slot()
         response = Groq(api_key=api_key).chat.completions.create(
             model=_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=600,
         )
+        usage = getattr(response, "usage", None)
+        if usage_callback is not None and usage is not None:
+            usage_callback(
+                int(getattr(usage, "prompt_tokens", 0) or 0),
+                int(getattr(usage, "completion_tokens", 0) or 0),
+                str(getattr(response, "model", _MODEL)),
+            )
         content = response.choices[0].message.content or ""
         return _validate_suggestions(content, context)
+    except GroqGlobalLimitExceeded:
+        raise
     except Exception as error:
         # No user data or provider response is included in logs.
         logger.warning("Suggestion generation fell back to rules (%s).", type(error).__name__)
@@ -546,6 +563,7 @@ def get_suggestions(
     context: dict[str, Any],
     user_id: int,
     refresh: bool = False,
+    usage_callback: Callable[[int, int, str], None] | None = None,
 ) -> SuggestionResponse:
     context_hash = hashlib.sha256(
         json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -563,7 +581,7 @@ def get_suggestions(
                 raise ValueError("refresh_too_soon")
             _refresh_times[user_id] = now
 
-    generated = _call_groq(context, "fr")
+    generated = _call_groq(context, "fr", usage_callback)
     source: Literal["ai", "rules"] = "ai" if generated is not None else "rules"
     suggestions = generated if generated is not None else generate_rule_suggestions(context)
     with _cache_lock:
