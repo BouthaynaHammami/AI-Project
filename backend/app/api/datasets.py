@@ -17,10 +17,12 @@ from app.schemas.dataset import (
     DatasetUploadResponse,
 )
 from app.services.file_service import get_document_page_count, read_file_as_dataframe, save_and_read_file
+from app.services.profiling_service import profile_dataframe
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["Datasets"])
+TABULAR_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 
 
 def _json_safe(value: Any) -> Any:
@@ -99,6 +101,7 @@ async def upload_datasets(
             )
             db.add(dataset)
             db.flush()
+            profile = profile_dataframe(dataframe) if file_path.suffix.lower() in TABULAR_EXTENSIONS else None
 
             uploaded_datasets.append(
                 DatasetUploadResponse(
@@ -111,6 +114,7 @@ async def upload_datasets(
                     page_count=get_document_page_count(file_path),
                     column_names=[str(column) for column in dataframe.columns],
                     preview=_build_preview(dataframe),
+                    profile=profile,
                 )
             )
 
@@ -153,6 +157,7 @@ def get_dataset_preview(
         logger.exception("Could not read dataset preview")
         raise HTTPException(status_code=500, detail="Could not read the dataset.") from error
 
+    profile = profile_dataframe(dataframe) if file_path.suffix.lower() in TABULAR_EXTENSIONS else None
     return DatasetPreviewResponse(
         id=int(dataset.id),
         filename=dataset.filename,
@@ -162,4 +167,5 @@ def get_dataset_preview(
         page_count=get_document_page_count(file_path),
         column_names=[str(column) for column in dataframe.columns],
         preview=_build_preview(dataframe),
+        profile=profile,
     )

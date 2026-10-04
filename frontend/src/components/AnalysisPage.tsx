@@ -1,8 +1,12 @@
+import { useEffect, useRef, useState } from 'react'
 import { BarChart3, Database, FileText, Hash, MessageSquare } from 'lucide-react'
 import { ChatWindow } from './ChatWindow'
+import { ChartRenderer } from './ChartRenderer'
 import { DataPreviewTable } from './DataPreviewTable'
+import { SuggestedQuestions } from './SuggestedQuestions'
 import type { ChartConfig, Message } from '../types'
 import type { DatasetPreview } from '../services/fileService'
+import { getSuggestions, type SuggestedQuestion } from '../services/analysisService'
 
 type Props = {
   datasets: DatasetPreview[]
@@ -11,6 +15,9 @@ type Props = {
   isAnalyzing: boolean
   chartConfig: string | null
   onAsk: (question: string, datasetIds?: number[]) => void
+  onFeedback: (analysisId: number, rating: 1 | -1, comment: string | null) => Promise<void>
+  onClearFeedback: (analysisId: number) => Promise<void>
+  onNewConversation: () => void
   onAddFiles: (files: File[]) => Promise<void>
 }
 
@@ -39,7 +46,61 @@ const documentSuggestions = [
   },
 ]
 
-export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, chartConfig, onAsk, onAddFiles }: Props) {
+export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, chartConfig, onAsk, onFeedback, onClearFeedback, onNewConversation, onAddFiles }: Props) {
+  const [suggestions, setSuggestions] = useState<SuggestedQuestion[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsUnavailable, setSuggestionsUnavailable] = useState(false)
+  const suggestionAbortRef = useRef<AbortController | null>(null)
+  const datasetIds = datasets.map((dataset) => dataset.dataset_id)
+  const datasetIdsKey = datasetIds.join(',')
+  const hasAskedQuestion = Boolean(firstQuestion.trim()) || messages.some((message) => message.role === 'user')
+
+  useEffect(() => () => suggestionAbortRef.current?.abort(), [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    suggestionAbortRef.current?.abort()
+    suggestionAbortRef.current = controller
+    setSuggestions([])
+    setSuggestionsUnavailable(false)
+    if (!datasetIdsKey || hasAskedQuestion) return () => controller.abort()
+
+    setSuggestionsLoading(true)
+    getSuggestions(datasetIds, false, controller.signal)
+      .then((items) => {
+        if (!controller.signal.aborted) setSuggestions(items.suggestions)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSuggestionsUnavailable(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSuggestionsLoading(false)
+      })
+    return () => controller.abort()
+  }, [datasetIdsKey, hasAskedQuestion])
+
+  const refreshSuggestions = async () => {
+    suggestionAbortRef.current?.abort()
+    const controller = new AbortController()
+    suggestionAbortRef.current = controller
+    setSuggestionsLoading(true)
+    setSuggestionsUnavailable(false)
+    try {
+      const result = await getSuggestions(datasetIds, true, controller.signal)
+      if (!controller.signal.aborted) {
+        setSuggestions(result.suggestions)
+        setSuggestionsUnavailable(result.suggestions.length === 0)
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        setSuggestions([])
+        setSuggestionsUnavailable(true)
+      }
+    } finally {
+      if (!controller.signal.aborted) setSuggestionsLoading(false)
+    }
+  }
+
   const primary = datasets[0] ?? null
   const tabularDatasets = datasets.filter((dataset) => /\.(csv|xlsx?)$/i.test(dataset.filename))
   let chart: ChartConfig | null = null
@@ -50,25 +111,6 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
     chart = null
   }
 
-  if (!chart && tabularDatasets.length > 0) {
-    const numericDataset = tabularDatasets.find((dataset) =>
-      dataset.column_names.some((column) =>
-        dataset.preview.some((row) => typeof row[column] === 'number')
-      )
-    )
-    const numericColumn = numericDataset?.column_names.find((column) =>
-      numericDataset.preview.some((row) => typeof row[column] === 'number')
-    )
-
-    if (numericDataset && numericColumn) {
-      const values = numericDataset.preview
-        .map((row) => Number(row[numericColumn]))
-        .filter((value) => Number.isFinite(value))
-      chart = { title: numericColumn, labels: values.map((_, index) => String(index + 1)), values }
-    }
-  }
-
-  const maxValue = chart ? Math.max(...chart.values, 1) : 1
   const totalRows = tabularDatasets.reduce((sum, dataset) => sum + dataset.row_count, 0)
   const totalColumns = tabularDatasets.reduce((sum, dataset) => sum + dataset.column_count, 0)
   const title = datasets.length > 1
@@ -154,14 +196,7 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
                 </div>
               </div>
               {chart ? (
-                <div className="saved-chart" aria-label={`Graphique de ${chart.title}`}>
-                  {chart.values.map((value, index) => (
-                    <div className="saved-chart-bar" key={`${chart?.labels[index] ?? index}-${value}`}>
-                      <span style={{ height: `${Math.max((value / maxValue) * 100, 4)}%` }} />
-                      <small>{chart?.labels[index]}</small>
-                    </div>
-                  ))}
-                </div>
+                <ChartRenderer config={chart} />
               ) : (
                 <div className="empty-dashboard">
                   <BarChart3 size={28} />
@@ -179,7 +214,24 @@ export function AnalysisPage({ datasets, firstQuestion, messages, isAnalyzing, c
       )}
 
       {tabularDatasets.length > 0 && <DataPreviewTable datasets={tabularDatasets} />}
-      <ChatWindow messages={messages} isAnalyzing={isAnalyzing} onAsk={(question) => onAsk(question, datasets.map((dataset) => dataset.dataset_id))} onAddFiles={onAddFiles} />
+      {!hasAskedQuestion && (
+        <SuggestedQuestions
+          suggestions={suggestions}
+          loading={suggestionsLoading}
+          onSelect={(question) => onAsk(question, datasetIds)}
+          onRefresh={() => void refreshSuggestions()}
+          empty={suggestionsUnavailable}
+        />
+      )}
+      <ChatWindow
+        messages={messages}
+        isAnalyzing={isAnalyzing}
+        onAsk={(question) => onAsk(question, datasetIds)}
+        onFeedback={onFeedback}
+        onClearFeedback={onClearFeedback}
+        onNewConversation={onNewConversation}
+        onAddFiles={onAddFiles}
+      />
     </div>
   )
 }

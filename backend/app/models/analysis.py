@@ -18,6 +18,13 @@ class Analysis(Base):
         index=True
     )
 
+    conversation_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     dataset_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("datasets.id"),
@@ -42,6 +49,10 @@ class Analysis(Base):
         Text,
         nullable=True
     )
+
+    generated_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_retried: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

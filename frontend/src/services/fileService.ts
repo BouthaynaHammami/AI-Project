@@ -1,6 +1,34 @@
 
 import { api } from './api'
 
+export type ProfileAlert = {
+  type: string
+  severity: 'info' | 'warning'
+  column: string | null
+  message: string
+}
+
+export type ColumnProfile = {
+  name: string
+  position: number
+  detected_type: 'numérique' | 'date' | 'catégorie' | 'texte' | 'booléen'
+  missing_count: number
+  missing_percentage: number
+  unique_count: number
+  statistics?: { min: number | null; max: number | null; mean: number | null; median: number | null }
+  top_values?: Array<{ value: unknown; count: number }>
+  date_range?: { min: string | null; max: string | null }
+}
+
+export type DataProfile = {
+  row_count: number
+  column_count: number
+  duplicate_rows: number
+  sampled_rows: number
+  columns: ColumnProfile[]
+  alerts: ProfileAlert[]
+}
+
 export type DatasetPreview = {
   dataset_id: number
   id: number
@@ -11,6 +39,7 @@ export type DatasetPreview = {
   page_count?: number | null
   column_names: string[]
   preview: Record<string, unknown>[]
+  profile?: DataProfile | null
 }
 
 // Upload multiple files separately in one request

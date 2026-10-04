@@ -1,12 +1,16 @@
-import { ArrowDownUp, Bot, Check, Copy, LoaderCircle, MessageCircle, Paperclip, Send, UserRound } from 'lucide-react'
+import { ArrowDownUp, Bot, Check, Copy, LoaderCircle, MessageCircle, Paperclip, Send, ThumbsDown, ThumbsUp, UserRound } from 'lucide-react'
 import { useRef, useState, type ChangeEvent } from 'react'
 import { getApiError } from '../services/api'
-import type { Message } from '../types'
+import type { ChartConfig, Message } from '../types'
+import { ChartRenderer } from './ChartRenderer'
 
 type Props = {
   messages: Message[]
   isAnalyzing: boolean
   onAsk: (question: string) => void
+  onFeedback: (analysisId: number, rating: 1 | -1, comment: string | null) => Promise<void>
+  onClearFeedback: (analysisId: number) => Promise<void>
+  onNewConversation: () => void
   onAddFiles: (files: File[]) => Promise<void>
 }
 
@@ -70,10 +74,18 @@ function AnswerText({ content }: { content: string }) {
   )
 }
 
-function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (question: string) => void }) {
+function AssistantResponse({ message, onAsk, onFeedback, onClearFeedback }: { message: Message; onAsk: (question: string) => void; onFeedback: Props['onFeedback']; onClearFeedback: Props['onClearFeedback'] }) {
   const [sort, setSort] = useState<{ column: number; direction: 'asc' | 'desc' } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [codeCopied, setCodeCopied] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
   const table = parseMarkdownTable(message.content)
+  let chart: ChartConfig | null = null
+  try {
+    chart = message.chartConfig ? JSON.parse(message.chartConfig) as ChartConfig : null
+  } catch {
+    chart = null
+  }
   const rows = table ? [...table.rows] : []
 
   if (table && sort) {
@@ -99,9 +111,40 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
     }
   }
 
+  const copyGeneratedCode = async () => {
+    if (!message.generatedCode) return
+    try {
+      await navigator.clipboard.writeText(message.generatedCode)
+      setCodeCopied(true)
+      window.setTimeout(() => setCodeCopied(false), 1800)
+    } catch {
+      setCodeCopied(false)
+    }
+  }
+
   const askFollowUp = () => {
     const excerpt = message.content.replace(/\s+/g, ' ').slice(0, 350)
     onAsk(`Peux-tu approfondir ce résultat et expliquer les chiffres qui le justifient ? Réponse précédente : ${excerpt}`)
+  }
+
+  const rateAnswer = async (rating: 1 | -1, comment: string | null = null) => {
+    if (!message.analysisId) return
+    setFeedbackError('')
+    try {
+      await onFeedback(message.analysisId, rating, comment)
+    } catch {
+      setFeedbackError('Le vote n’a pas pu être enregistré. Réessayez.')
+    }
+  }
+
+  const clearAnswerFeedback = async () => {
+    if (!message.analysisId) return
+    setFeedbackError('')
+    try {
+      await onClearFeedback(message.analysisId)
+    } catch {
+      setFeedbackError('Le vote n’a pas pu être annulé. Réessayez.')
+    }
   }
 
   return (
@@ -134,6 +177,7 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
       ) : (
         <AnswerText content={message.content} />
       )}
+      {chart && <ChartRenderer config={chart} />}
       <div className="answer-actions">
         <button type="button" onClick={() => void copyAnswer()} title="Copier la réponse">
           {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -143,12 +187,66 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
           <MessageCircle size={14} />
           Question de suivi
         </button>
+        {message.analysisId && (
+          <div className="answer-feedback" aria-label="Évaluer cette réponse">
+            <button
+              type="button"
+              className={message.feedback?.rating === 1 ? 'answer-feedback-selected' : ''}
+              onClick={() => void (message.feedback?.rating === 1 ? clearAnswerFeedback() : rateAnswer(1))}
+              aria-label={message.feedback?.rating === 1 ? 'Annuler le vote positif' : 'Réponse utile'}
+              aria-pressed={message.feedback?.rating === 1}
+              title={message.feedback?.rating === 1 ? 'Annuler le vote' : 'Réponse utile'}
+            >
+              <ThumbsUp size={15} strokeWidth={1.7} />
+            </button>
+            <button
+              type="button"
+              className={message.feedback?.rating === -1 ? 'answer-feedback-selected' : ''}
+              onClick={() => void (message.feedback?.rating === -1 ? clearAnswerFeedback() : rateAnswer(-1, null))}
+              aria-label={message.feedback?.rating === -1 ? 'Annuler le vote négatif' : 'Réponse pas utile'}
+              aria-pressed={message.feedback?.rating === -1}
+              title={message.feedback?.rating === -1 ? 'Annuler le vote' : 'Réponse pas utile'}
+            >
+              <ThumbsDown size={15} strokeWidth={1.7} />
+            </button>
+          </div>
+        )}
       </div>
+      {message.analysisId && message.feedback?.rating === -1 && (
+        <label className="answer-feedback-reason">
+          <span>Que s’est-il passé ?</span>
+          <select
+            value={message.feedback.comment ?? ''}
+            onChange={(event) => void rateAnswer(-1, event.target.value || null)}
+          >
+            <option value="">Choisir une raison (facultatif)</option>
+            <option value="Mauvais chiffre">Mauvais chiffre</option>
+            <option value="Graphique inutile">Graphique inutile</option>
+            <option value="Ne répond pas à la question">Ne répond pas à la question</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </label>
+      )}
+      {feedbackError && <p className="answer-feedback-error" role="alert">{feedbackError}</p>}
+      {message.generatedCode && (
+        <details className="generated-code-details">
+          <summary>Voir le code généré</summary>
+          <div className="generated-code-toolbar">
+            {message.codeRetried && <span className="generated-code-corrected">Corrigé automatiquement</span>}
+            <button type="button" onClick={() => void copyGeneratedCode()}>
+              {codeCopied ? <Check size={13} /> : <Copy size={13} />}
+              {codeCopied ? 'Copié' : 'Copier'}
+            </button>
+          </div>
+          <pre className="generated-code-block"><code>{message.generatedCode}</code></pre>
+          {message.codeExplanation && <p className="generated-code-explanation">{message.codeExplanation}</p>}
+        </details>
+      )}
     </div>
   )
 }
 
-export function ChatWindow({ messages, isAnalyzing, onAsk, onAddFiles }: Props) {
+export function ChatWindow({ messages, isAnalyzing, onAsk, onFeedback, onClearFeedback, onNewConversation, onAddFiles }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [question, setQuestion] = useState('')
   const [addingFiles, setAddingFiles] = useState(false)
@@ -183,7 +281,12 @@ export function ChatWindow({ messages, isAnalyzing, onAsk, onAddFiles }: Props) 
           <span className="section-kicker">ÉTAPE 02</span>
           <h2>Posez votre question</h2>
         </div>
-        <span className="online-dot">IA en ligne</span>
+        <div className="chat-heading-actions">
+          <button type="button" className="new-conversation-button" onClick={onNewConversation} disabled={isAnalyzing}>
+            Nouvelle conversation
+          </button>
+          <span className="online-dot">IA en ligne</span>
+        </div>
       </div>
       <div className="messages" role="log" aria-live="polite">
         {messages.map((message) => (
@@ -193,7 +296,7 @@ export function ChatWindow({ messages, isAnalyzing, onAsk, onAddFiles }: Props) 
             </span>
             <div className="message-content">
               {message.role === 'assistant'
-                ? <AssistantResponse message={message} onAsk={onAsk} />
+                ? <AssistantResponse message={message} onAsk={onAsk} onFeedback={onFeedback} onClearFeedback={onClearFeedback} />
                 : <p className="font-chat">{message.content}</p>}
               <time>{message.timestamp}</time>
             </div>

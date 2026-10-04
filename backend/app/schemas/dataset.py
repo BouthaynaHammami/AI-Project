@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,6 +25,7 @@ class DatasetPreviewResponse(BaseModel):
     page_count: int | None = None
     column_names: list[str]
     preview: list[dict]
+    profile: dict[str, Any] | None = None
 
 
 class DatasetUploadResponse(DatasetPreviewResponse):

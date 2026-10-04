@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import re
 from contextlib import redirect_stdout
@@ -148,6 +149,7 @@ def _build_first_prompt(
     question: str,
     dataset_summary: str,
     generate_chart: bool,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Construit le prompt principal."""
     chart_instruction = (
@@ -171,13 +173,17 @@ DONNÉES :
 
 {dataset_summary}
 
+ÉCHANGES PRÉCÉDENTS (textes produits précédemment; aucune ligne brute) :
+
+{_serialize_conversation_history(conversation_history or [])}
+
 QUESTION DE L'UTILISATEUR :
 
 {question}
 
 INSTRUCTIONS STRICTES :
 
-1. Génère uniquement du code Python/pandas valide, très concis (moins de 400 tokens), sans commentaire ni Markdown.
+1. Génère uniquement du code Python/pandas valide, très concis (moins de 400 tokens), sans commentaire ni Markdown. La question fournie est autonome; utilise l'historique uniquement pour interpréter ses références.
 
 2. Utilise la variable `df` telle quelle.
 
@@ -200,16 +206,21 @@ INSTRUCTIONS STRICTES :
 {chart_instruction} Dans ce cas, crée une variable `chart_data` sous cette forme :
 
 chart_data = {{
+    "type": "bar",
     "title": "Titre du graphique",
+    "x_label": "Axe horizontal",
+    "y_label": "Axe vertical",
     "labels": ["A", "B"],
-    "values": [10, 20]
+    "series": [
+        {{"name": "Série 1", "values": [10, 20]}}
+    ]
 }}
 
-10. Les labels doivent être des chaînes.
+10. Choisis le type selon ces règles : évolution temporelle -> "line" ; parts d'un tout avec au plus 8 catégories -> "pie" ; relation entre deux colonnes numériques -> "scatter" ; sinon -> "bar".
 
-11. Les values doivent être numériques.
+11. Les labels doivent être des chaînes; chaque série contient des nombres finis dans le même ordre et en même nombre que les labels.
 
-12. Limite les graphiques à 20 points maximum.
+12. Limite à 20 points (50 pour "scatter"); agrège les données au lieu de tronquer arbitrairement les premières lignes.
 
 13. Utilise uniquement les bibliothèques :
     - pandas
@@ -227,6 +238,7 @@ def _build_retry_prompt(
     failed_code: str,
     error_message: str,
     generate_chart: bool,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> str:
     """Construit le prompt de correction."""
     chart_instruction = (
@@ -241,6 +253,10 @@ Le code Python suivant a provoqué une erreur.
 DONNÉES :
 
 {dataset_summary}
+
+ÉCHANGES PRÉCÉDENTS (textes produits précédemment; aucune ligne brute) :
+
+{_serialize_conversation_history(conversation_history or [])}
 
 QUESTION :
 
@@ -265,6 +281,9 @@ IMPORTANT :
 - Affiche le résultat avec print(...).
 - Garde le code sous 400 tokens, sans commentaires; n'imprime pas toutes les lignes ou le contenu intégral des documents.
 {chart_instruction}
+- Si tu crées un graphique, utilise la forme chart_data suivante : {{"type":"bar|line|pie|scatter","title":"...","x_label":"...","y_label":"...","labels":["..."],"series":[{{"name":"...","values":[1]}}]}}.
+- Choisis "line" pour une évolution temporelle, "pie" pour les parts d'un tout avec au plus 8 catégories, "scatter" pour deux variables numériques avec labels x numériques, sinon "bar".
+- Une série doit avoir une valeur finie par label; limite à 20 points (50 pour scatter), en agrégeant plutôt qu'en tronquant.
 - Réponds uniquement avec du code Python.
 """
 
@@ -298,7 +317,104 @@ IMPORTANT :
 - Ne mentionne pas le code Python.
 - Ne parle pas de détails techniques inutiles.
 - Maximum 5 phrases.
+- Après la réponse, fournis aussi une explication très simple du code : quelles données sont filtrées, puis quel calcul est fait.
+- Réponds uniquement avec un JSON strict de la forme {{"answer":"réponse à l'utilisateur","code_explanation":"explication du calcul en une phrase"}}.
 """
+
+
+def _parse_summary(text: str) -> tuple[str, str]:
+    """Read the answer and code explanation from the same LLM response."""
+    cleaned = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return cleaned, ""
+    if not isinstance(payload, dict):
+        return cleaned, ""
+    answer = payload.get("answer")
+    explanation = payload.get("code_explanation")
+    if not isinstance(answer, str):
+        return cleaned, ""
+    return answer.strip(), explanation.strip() if isinstance(explanation, str) else ""
+
+
+def _bounded_conversation_history(
+    history: list[dict[str, str]],
+    max_chars: int = 2400,
+) -> list[dict[str, str]]:
+    """Retient uniquement trois échanges récents et borne leur taille."""
+    bounded = []
+    used_chars = 0
+    for exchange in history[-3:]:
+        item = {
+            "question": str(exchange.get("question", ""))[:350],
+            "answer": str(exchange.get("answer", ""))[:500],
+            "code": str(exchange.get("code", ""))[:450],
+        }
+        item_size = sum(len(value) for value in item.values())
+        if used_chars + item_size > max_chars:
+            remaining = max_chars - used_chars
+            if remaining <= 0:
+                break
+            for key in ("question", "answer", "code"):
+                item[key] = item[key][:remaining]
+                remaining -= len(item[key])
+            item_size = sum(len(value) for value in item.values())
+        bounded.append(item)
+        used_chars += item_size
+    return bounded
+
+
+def _serialize_conversation_history(history: list[dict[str, str]]) -> str:
+    return json.dumps(_bounded_conversation_history(history), ensure_ascii=False)
+
+
+def _resolve_follow_up(
+    client: Groq,
+    question: str,
+    history: list[dict[str, str]],
+) -> tuple[str | None, str | None]:
+    """Réécrit une question contextuelle en question autonome ou demande une précision."""
+    response = client.chat.completions.create(
+        model=_MODEL,
+        messages=[{
+            "role": "user",
+            "content": f"""
+Tu reformules les questions de suivi d'un assistant d'analyse de données.
+Historique récent (textes déjà produits uniquement; aucune ligne brute) :
+{_serialize_conversation_history(history)}
+
+Nouvelle question : {question[:1000]}
+
+Réponds en JSON strict uniquement :
+{{"status":"ready","question":"question autonome"}}
+ou
+{{"status":"clarify","question":"question courte pour lever l'ambiguïté"}}
+N'invente jamais de filtre, catégorie ou mesure absent de l'historique. Si une référence ne peut pas être résolue sans deviner, demande une clarification.
+""",
+        }],
+        temperature=0,
+        max_tokens=300,
+    )
+    text = (response.choices[0].message.content or "").strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "Pouvez-vous préciser votre question pour que je puisse l’analyser sans supposer le contexte ?"
+    if not isinstance(result, dict) or not isinstance(result.get("question"), str):
+        return None, "Pouvez-vous préciser votre question pour que je puisse l’analyser sans supposer le contexte ?"
+    resolved = result["question"].strip()[:1000]
+    if result.get("status") == "ready" and resolved:
+        return resolved, None
+    if result.get("status") == "clarify" and resolved:
+        return None, resolved
+    return None, "Pouvez-vous préciser votre question pour que je puisse l’analyser sans supposer le contexte ?"
 
 
 # ============================================================================
@@ -309,7 +425,8 @@ def analyze_dataset(
     question: str,
     df: pd.DataFrame,
     generate_chart: bool = False,
-) -> dict[str, str | None]:
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """
     Analyse un ou plusieurs datasets.
 
@@ -349,6 +466,22 @@ def analyze_dataset(
         )
 
     client = Groq(api_key=api_key)
+    conversation_history = _bounded_conversation_history(conversation_history or [])
+    resolved_question = question
+    if conversation_history:
+        resolved_question, clarification = _resolve_follow_up(
+            client,
+            resolved_question,
+            conversation_history,
+        )
+        if resolved_question is None:
+            return {
+                "answer": clarification or "Pouvez-vous préciser votre question ?",
+                "chart_config": None,
+                "code": None,
+                "retried": False,
+                "code_explanation": None,
+            }
 
     # ------------------------------------------------------------------------
     # DATASET SUMMARY
@@ -377,9 +510,10 @@ def analyze_dataset(
             {
                 "role": "user",
                 "content": _build_first_prompt(
-                    question,
+                    resolved_question,
                     dataset_summary,
                     generate_chart,
+                    conversation_history,
                 ),
             }
         ],
@@ -402,12 +536,11 @@ def analyze_dataset(
 
     code_output = ""
     chart_data: dict[str, Any] | None = None
+    executed_code = generated_code
+    code_retried = False
 
     try:
-        code_output, chart_data = _execute_code(
-            generated_code,
-            df,
-        )
+        code_output, chart_data = _execute_code(executed_code, df)
 
         logger.info(
             "Exécution réussie : %r",
@@ -440,6 +573,7 @@ def analyze_dataset(
                         generated_code,
                         error_message,
                         generate_chart,
+                        conversation_history,
                     ),
                 }
             ],
@@ -461,6 +595,8 @@ def analyze_dataset(
                 corrected_code,
                 df,
             )
+            executed_code = corrected_code
+            code_retried = True
 
             logger.info(
                 "Retry réussi : %r",
@@ -481,6 +617,9 @@ def analyze_dataset(
                     "le format de vos fichiers."
                 ),
                 "chart_config": None,
+                "code": None,
+                "retried": True,
+                "code_explanation": None,
             }
 
     # ------------------------------------------------------------------------
@@ -508,96 +647,29 @@ def analyze_dataset(
         max_tokens=768,
     )
 
-    answer = (
+    summary_text = (
         summary_response.choices[0].message.content or ""
     ).strip()
+    answer, code_explanation = _parse_summary(summary_text)
 
     # ------------------------------------------------------------------------
     # STEP 4 — CHART
     # ------------------------------------------------------------------------
 
     chart_config_json: str | None = None
-
-    if chart_data:
+    if chart_data is not None:
         try:
-            labels = [
-                str(label)
-                for label in chart_data.get("labels", [])
-            ]
-
-            values = [
-                float(value)
-                for value in chart_data.get("values", [])
-            ]
-
-            title = str(
-                chart_data.get(
-                    "title",
-                    "Résultat",
-                )
-            )
-
-            if (
-                labels
-                and values
-                and len(labels) == len(values)
-            ):
+            validated_chart = _validate_chart_data(chart_data)
+            if validated_chart is not None:
                 chart_config_json = json.dumps(
-                    {
-                        "title": title,
-                        "labels": labels,
-                        "values": values,
-                    },
+                    validated_chart,
                     ensure_ascii=False,
+                    allow_nan=False,
                 )
-
+            else:
+                logger.info("Graphique ignoré : configuration invalide")
         except (TypeError, ValueError) as chart_error:
-            logger.warning(
-                "chart_data invalide : %s",
-                chart_error,
-            )
-
-    # ------------------------------------------------------------------------
-    # STEP 5 — FALLBACK CHART
-    # ------------------------------------------------------------------------
-
-    if not chart_config_json:
-
-        numeric_cols = [
-            column
-            for column in df.select_dtypes(
-                include="number"
-            ).columns
-            if column != "__source_file"
-        ]
-
-        if numeric_cols:
-
-            column = numeric_cols[0]
-
-            values_fallback = (
-                df[column]
-                .dropna()
-                .head(8)
-                .tolist()
-            )
-
-            chart_config_json = json.dumps(
-                {
-                    "title": column,
-                    "labels": [
-                        str(index + 1)
-                        for index in range(
-                            len(values_fallback)
-                        )
-                    ],
-                    "values": [
-                        float(value)
-                        for value in values_fallback
-                    ],
-                },
-                ensure_ascii=False,
-            )
+            logger.warning("Graphique ignoré : configuration invalide (%s)", type(chart_error).__name__)
 
     # ------------------------------------------------------------------------
     # RETURN
@@ -606,4 +678,75 @@ def analyze_dataset(
     return {
         "answer": answer,
         "chart_config": chart_config_json,
+        "code": executed_code,
+        "retried": code_retried,
+        "code_explanation": code_explanation,
+    }
+
+
+def _validate_chart_data(chart_data: dict[str, Any]) -> dict[str, Any] | None:
+    """Valide les données du graphique et convertit le format historique."""
+    chart_type = chart_data.get("type", "bar")
+    if not isinstance(chart_type, str) or chart_type not in {"bar", "line", "pie", "scatter"}:
+        return None
+
+    labels = chart_data.get("labels")
+    if not isinstance(labels, list) or not labels:
+        return None
+
+    if "series" not in chart_data and isinstance(chart_data.get("values"), list):
+        series = [{"name": str(chart_data.get("title") or "Valeur"), "values": chart_data["values"]}]
+    else:
+        series = chart_data.get("series")
+    if not isinstance(series, list) or not 1 <= len(series) <= 8:
+        return None
+
+    max_points = 50 if chart_type == "scatter" else 20
+    if len(labels) > max_points:
+        return None
+
+    normalized_series: list[dict[str, Any]] = []
+    series_names: set[str] = set()
+    for item in series:
+        if not isinstance(item, dict) or not isinstance(item.get("values"), list):
+            return None
+        values = item["values"]
+        if len(values) != len(labels) or not isinstance(item.get("name", ""), str):
+            return None
+        normalized_values = []
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            numeric_value = float(value)
+            if not math.isfinite(numeric_value):
+                return None
+            normalized_values.append(numeric_value)
+        name = item.get("name") or f"Série {len(normalized_series) + 1}"
+        if name in series_names:
+            return None
+        series_names.add(name)
+        normalized_series.append({
+            "name": name,
+            "values": normalized_values,
+        })
+
+    if chart_type == "pie" and (
+        len(labels) > 8
+        or len(normalized_series) != 1
+        or any(value < 0 for value in normalized_series[0]["values"])
+    ):
+        return None
+    if chart_type == "scatter":
+        try:
+            [float(label) for label in labels]
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "type": chart_type,
+        "title": str(chart_data.get("title") or "Résultat"),
+        "x_label": str(chart_data.get("x_label") or ""),
+        "y_label": str(chart_data.get("y_label") or ""),
+        "labels": [str(label) for label in labels],
+        "series": normalized_series,
     }

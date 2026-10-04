@@ -16,8 +16,8 @@ export function HistoryItem({ item, active, onClick }: Props) {
 		<button className={`history-item ${active ? 'history-item-active' : ''}`} onClick={onClick}>
 			<span className="history-file-icon"><Icon size={15} /></span>
 			<span className="min-w-0 text-left">
-				<strong>{item.kind === 'discussion' ? `Discussion · ${item.file}` : item.file}</strong>
-				<span>{item.kind === 'discussion' ? item.question : 'Import du fichier'}</span>
+				<strong>{item.kind === 'discussion' ? item.conversationTitle || `Discussion · ${item.file}` : item.file}</strong>
+				<span>{item.kind === 'discussion' ? `${item.conversationMessages?.length ?? 1} échange${(item.conversationMessages?.length ?? 1) > 1 ? 's' : ''} · ${item.question}` : 'Import du fichier'}</span>
 				<small>{item.date}</small>
 			</span>
 		</button>

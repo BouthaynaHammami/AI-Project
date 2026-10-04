@@ -8,11 +8,14 @@ import {
   Paperclip,
   X,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 
 import { getApiError } from '../services/api'
 import { uploadFiles, type DatasetPreview } from '../services/fileService'
+import { getSuggestions } from '../services/analysisService'
+import type { SuggestedQuestion as SuggestedQuestionData } from '../services/analysisService'
+import { SuggestedQuestions } from './SuggestedQuestions'
 
 type Props = {
   onAnalyze: (datasets: DatasetPreview[], question: string) => void
@@ -131,16 +134,29 @@ const buildPreview = async (file: File): Promise<SelectedFilePreview> => {
 
 export function AnalysisBar({ onAnalyze }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const suggestionAbortRef = useRef<AbortController | null>(null)
 
   const [files, setFiles] = useState<File[]>([])
   const [previews, setPreviews] = useState<SelectedFilePreview[]>([])
   const [question, setQuestion] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [uploadedItems, setUploadedItems] = useState<Array<{ fileId: string; dataset: DatasetPreview }>>([])
+  const uploadedDatasets = uploadedItems.map((item) => item.dataset)
+  const uploadedFileIds = uploadedItems.map((item) => item.fileId)
+  const [suggestions, setSuggestions] = useState<SuggestedQuestionData[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsEmpty, setSuggestionsEmpty] = useState(false)
+
+  useEffect(() => () => suggestionAbortRef.current?.abort(), [])
 
   const chooseFiles = async (candidates: FileList | null) => {
     if (!candidates) return
 
+    suggestionAbortRef.current?.abort()
+    setSuggestions([])
+    setSuggestionsLoading(false)
+    setSuggestionsEmpty(false)
     const newFiles = Array.from(candidates)
     const invalidFile = newFiles.find((file) => !isValidFile(file))
 
@@ -185,25 +201,83 @@ export function AnalysisBar({ onAnalyze }: Props) {
   }
 
   const removeFile = (indexToRemove: number) => {
+    const removedPreview = previews[indexToRemove]
+    if (removedPreview) {
+      suggestionAbortRef.current?.abort()
+      setSuggestionsLoading(false)
+      setUploadedItems((previous) => previous.filter((item) => item.fileId !== removedPreview.id))
+    }
     setFiles((previousFiles) => previousFiles.filter((_, index) => index !== indexToRemove))
     setPreviews((previousPreviews) => previousPreviews.filter((_, index) => index !== indexToRemove))
+    setSuggestions([])
+    setSuggestionsEmpty(false)
     setError('')
   }
 
   const submit = async () => {
-    if (files.length === 0 && !question.trim()) return
+    if (files.length === 0 && uploadedDatasets.length === 0 && !question.trim()) return
 
     setLoading(true)
     setError('')
 
     try {
-      const datasets = files.length > 0 ? await uploadFiles(files) : []
-      onAnalyze(datasets, question.trim())
+      const newFiles = files.filter((file) => {
+        const id = `${file.name}-${file.size}-${file.lastModified}`
+        return !uploadedFileIds.includes(id)
+      })
+      const newlyUploaded = newFiles.length > 0 ? await uploadFiles(newFiles) : []
+      const datasets = [...uploadedDatasets, ...newlyUploaded]
+      if (newlyUploaded.length > 0) {
+        setUploadedItems((previous) => [
+          ...previous,
+          ...newFiles.map((file, index) => ({
+            fileId: `${file.name}-${file.size}-${file.lastModified}`,
+            dataset: newlyUploaded[index],
+          })),
+        ])
+      }
+
+      if (question.trim()) {
+        onAnalyze(datasets, question.trim())
+      } else if (datasets.length > 0) {
+        await loadSuggestions(datasets.map((dataset) => dataset.dataset_id))
+      }
     } catch (uploadError) {
       setError(getApiError(uploadError))
     } finally {
       setLoading(false)
     }
+  }
+
+  const loadSuggestions = async (datasetIds: number[], refresh = false) => {
+    suggestionAbortRef.current?.abort()
+    const controller = new AbortController()
+    suggestionAbortRef.current = controller
+    setSuggestionsLoading(true)
+    setSuggestionsEmpty(false)
+    setError('')
+    try {
+      const result = await getSuggestions(datasetIds, refresh, controller.signal)
+      if (!controller.signal.aborted) {
+        setSuggestions(result.suggestions)
+        setSuggestionsEmpty(result.suggestions.length === 0)
+      }
+    } catch (suggestionError) {
+      if (!controller.signal.aborted) {
+        setSuggestions([])
+        setSuggestionsEmpty(true)
+        setError(getApiError(suggestionError))
+      }
+    } finally {
+      if (!controller.signal.aborted) setSuggestionsLoading(false)
+    }
+  }
+
+  const submitSuggestion = (suggestion: string) => {
+    if (loading || uploadedDatasets.length === 0) return
+    setQuestion(suggestion)
+    setSuggestions([])
+    onAnalyze(uploadedDatasets, suggestion)
   }
 
   const renderPreview = (preview: SelectedFilePreview, index: number) => {
@@ -283,10 +357,19 @@ export function AnalysisBar({ onAnalyze }: Props) {
           placeholder="Posez une question sur vos données..."
         />
 
-        <button className="send-button analysis-send" aria-label="Lancer l'analyse" onClick={() => void submit()} disabled={loading || (files.length === 0 && !question.trim())}>
+        <button className="send-button analysis-send" aria-label={question.trim() ? "Lancer l'analyse" : "Importer et obtenir des suggestions"} title={question.trim() ? "Lancer l'analyse" : "Importer le fichier et afficher des questions suggérées"} onClick={() => void submit()} disabled={loading || (files.length === 0 && uploadedDatasets.length === 0 && !question.trim())}>
           <ArrowUp size={17} />
         </button>
       </div>
+      {(uploadedDatasets.length > 0 || suggestionsLoading || suggestions.length > 0 || suggestionsEmpty) && (
+        <SuggestedQuestions
+          suggestions={suggestions}
+          loading={suggestionsLoading}
+          onSelect={submitSuggestion}
+          onRefresh={() => void loadSuggestions(uploadedDatasets.map((dataset) => dataset.dataset_id), true)}
+          empty={suggestionsEmpty}
+        />
+      )}
 
       <div className="analysis-file-row">
         <button type="button" className="icon-button" onClick={() => inputRef.current?.click()} aria-label="Importer des fichiers" title="Importer des fichiers" disabled={loading}>
