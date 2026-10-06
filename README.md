@@ -69,9 +69,10 @@ git clone https://github.com/BouthaynaHammami/AI-Project.git
 cd AI-Project
 ```
 
-### 2. Créer un environnement virtuel
+### 2. Créer et activer l’environnement virtuel Python
 
 ```bash
+cd backend
 python -m venv .venv
 source .venv/bin/activate
 ```
@@ -79,35 +80,56 @@ source .venv/bin/activate
 Sous Windows PowerShell :
 
 ```powershell
-python -m venv .venv
+cd backend
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
 ### 3. Installer les dépendances backend
 
 ```bash
-cd backend
 pip install -r requirements.txt
 ```
 
 ### 4. Configurer les variables d'environnement
 
-Créer un fichier `.env` dans le dossier `backend` avec une configuration similaire à :
+Copier `backend/.env.example` vers `backend/.env`. Pour SQLite en local, définir
+`DATABASE_URL=sqlite:///./database.db`. `ENV=dev` permet une clé JWT temporaire
+si `JWT_SECRET_KEY` est vide. Sans SMTP, le code de vérification est écrit dans
+les logs uniquement en développement. Pour voir les emails, démarrer Mailpit
+(SMTP `localhost:1025`, interface `http://localhost:8025`).
 
 ```env
 DATABASE_URL=postgresql+psycopg2://postgres:123@localhost:5432/ai_data_analyst
-JWT_SECRET_KEY=your_secret_key
+ENV=dev
+JWT_SECRET_KEY=
+JWT_EXPIRE_MINUTES=30
 FRONTEND_ORIGIN=http://localhost:5173
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_FROM=AI Data Analyst <no-reply@localhost>
+SMTP_TLS=false
 ```
 
 ## ▶️ Lancer l'application
 
-### Backend
+### Backend (premier terminal)
 
 ```bash
 cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+### Frontend (second terminal)
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Ouvrir l’adresse Vite affichée dans le terminal, généralement
+`http://localhost:5173`.
 
 ### Documentation API
 
@@ -121,9 +143,25 @@ http://localhost:8000/docs
 
 ### Authentification
 
-- `POST /auth/register`
+- `POST /auth/signup` — inscription et envoi d’un code de vérification
+- `POST /auth/verify-email`
+- `POST /auth/resend-code`
 - `POST /auth/login`
 - `GET /auth/me`
+- `PUT /auth/me`
+- `POST /auth/logout`
+- `POST /auth/forgot-password`
+- `POST /auth/reset-password`
+
+Les codes expirent après 10 minutes. Les comptes antérieurs à cette vérification
+peuvent être marqués comme vérifiés après migration avec
+`UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;`.
+
+Le frontend conserve actuellement le jeton d’accès dans `localStorage` pour
+préserver la compatibilité avec l’API bearer existante. Une faille XSS pourrait
+permettre à un script injecté de lire ce jeton ; déployer une politique CSP
+stricte et éviter toute injection HTML non assainie. Le passage à un cookie
+`httpOnly` nécessitera aussi une protection CSRF.
 
 ### Données
 
@@ -156,8 +194,10 @@ backend/
 ## 🧪 Développement
 
 - Le backend crée automatiquement les tables nécessaires au démarrage.
-- PostgreSQL est requis pour le stockage des données.
+- PostgreSQL est recommandé en production ; SQLite est pris en charge pour le développement local.
 - Les routes sensibles sont protégées par authentification JWT.
+- En développement, les codes sont écrits dans les logs seulement avec `ENV=dev` sans SMTP. En production, configurez SMTP et une clé JWT aléatoire d’au moins 32 caractères.
+- Après migration, les comptes historiques peuvent être marqués comme vérifiés avec `UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;`.
 
 ## 🛠️ Dépannage
 

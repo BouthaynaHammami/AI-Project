@@ -1,10 +1,11 @@
 import { Rows3 } from 'lucide-react'
 import type { DatasetPreview } from '../services/fileService'
+import { DataProfile } from './DataProfile'
 
 type Props = { datasets: DatasetPreview[] }
 
 function SingleTable({ dataset }: { dataset: DatasetPreview }) {
-  return <section className="preview-card"><div className="preview-header"><div><span className="section-kicker">APERÇU DU FICHIER</span><h2>{dataset.filename}</h2></div><span className="success-badge">● Données prêtes</span></div><div className="stats-row"><div><strong>{dataset.row_count.toLocaleString('fr-FR')}</strong><span>Lignes</span></div><div><strong>{dataset.column_count}</strong><span>Colonnes</span></div><div className="columns-stat"><Rows3 size={16} /><span>{dataset.column_names.join(' · ')}</span></div></div><div className="table-wrap"><table><thead><tr>{dataset.column_names.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{dataset.preview.map((row, rowIndex) => <tr key={rowIndex}>{dataset.column_names.map((column) => <td key={column}>{String(row[column] ?? '')}</td>)}</tr>)}</tbody></table></div></section>
+  return <section className="preview-card"><div className="preview-header"><div><span className="section-kicker">APERÇU DU FICHIER</span><h2>{dataset.filename}</h2></div><span className="success-badge">● Données prêtes</span></div><div className="stats-row"><div><strong>{dataset.row_count.toLocaleString('fr-FR')}</strong><span>Lignes</span></div><div><strong>{dataset.column_count}</strong><span>Colonnes</span></div><div className="columns-stat"><Rows3 size={16} /><span>{dataset.column_names.join(' · ')}</span></div></div><div className="table-wrap"><table><thead><tr>{dataset.column_names.map((column, index) => <th key={`${column}-${index}`}>{column}</th>)}</tr></thead><tbody>{dataset.preview.map((row, rowIndex) => <tr key={rowIndex}>{dataset.column_names.map((column, columnIndex) => <td key={`${column}-${columnIndex}`}>{String(row[column] ?? '')}</td>)}</tr>)}</tbody></table></div>{(dataset.profile || dataset.pii_report.column_count > 0) && <DataProfile profile={dataset.profile} datasetId={dataset.dataset_id} piiReport={dataset.pii_report} piiPreferences={dataset.pii_preferences} />}</section>
 }
 
 export function DataPreviewTable({ datasets }: Props) {

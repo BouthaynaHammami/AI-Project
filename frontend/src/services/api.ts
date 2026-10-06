@@ -24,7 +24,21 @@ export const getApiError = (error: unknown) => {
     const isAuthRequest = error.config?.url?.includes('/auth/') ?? false
     if (error.response?.status === 409) return 'Cette adresse email est déjà utilisée. Connectez-vous ou choisissez une autre adresse.'
     if (error.response?.status === 401 && isAuthRequest) return 'Vérifiez vos données : adresse email et mot de passe incorrects.'
-    if (error.response?.status === 422 && isAuthRequest) return 'Vérifiez vos données : l’adresse email doit être valide et le mot de passe doit contenir au moins 8 caractères.'
+    if (error.response?.status === 403 && error.response?.data?.detail === 'EMAIL_NOT_VERIFIED') return 'EMAIL_NOT_VERIFIED'
+    if (error.response?.status === 429) {
+      const retryAfter = Number(error.response.headers['retry-after'] ?? 60)
+      return `Trop de tentatives, réessayez dans ${Number.isFinite(retryAfter) ? retryAfter : 60} secondes`
+    }
+    if (error.response?.status === 422 && isAuthRequest) {
+      const detail = error.response?.data?.detail
+      if (Array.isArray(detail) && detail[0]?.msg) {
+        const message = String(detail[0].msg).replace(/^Value error,\s*/i, '')
+        if (/valid email|email address/i.test(message)) return 'Saisissez une adresse email valide.'
+        if (/field required|missing/i.test(message)) return 'Complétez tous les champs obligatoires.'
+        return message
+      }
+      return 'Vérifiez vos données : adresse email ou mot de passe invalide.'
+    }
     const detail = error.response?.data?.detail
     if (typeof detail === 'string') return detail
     if (Array.isArray(detail) && detail[0]?.msg) return String(detail[0].msg)

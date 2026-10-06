@@ -1,107 +1,93 @@
 # Backend - AI Data Analyst
 
-This is the FastAPI backend for the AI Data Analyst project.
-
-## Project structure
-
-```text
-backend/
-├── app/
-│   ├── api/
-│   ├── core/
-│   ├── models/
-│   ├── schemas/
-│   ├── services/
-│   └── main.py
-├── uploads/
-├── .env
-├── requirements.txt
-├── README.md
-└── uvicorn
-```
+FastAPI API for the AI Data Analyst application.
 
 ## Requirements
 
-- Python 3.11+
-- PostgreSQL installed and running
-- Backend virtual environment at `backend\venv`
+- Python 3.11
+- PostgreSQL for production, or SQLite for local development
 
-## Use the backend virtual environment
+## Local setup (Windows PowerShell)
 
-From the `backend` directory, activate the project's virtual environment:
-
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-
-## Install dependencies
+From the repository root:
 
 ```powershell
+cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-## Configure environment
+Set `ENV=dev` and `DATABASE_URL=sqlite:///./database.db` in `backend\.env`.
+With no `JWT_SECRET_KEY`, development generates an ephemeral key; sessions expire
+when the backend restarts. Production must use a random key of at least 32
+characters and must not use `ENV=dev`.
 
-Check the `.env` file in the backend folder and make sure it contains the PostgreSQL database URL:
+## Email delivery
+
+For local testing, run Mailpit and configure its SMTP endpoint:
 
 ```env
-DATABASE_URL=postgresql+psycopg2://postgres:123@localhost:5432/ai_data_analyst
-JWT_SECRET_KEY=your_secret_key
-FRONTEND_ORIGIN=http://localhost:5173
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_TLS=false
+SMTP_FROM=AI Data Analyst <no-reply@localhost>
 ```
 
-## Start the backend
+Open the Mailpit inbox at `http://localhost:8025`. For Mailtrap, use the SMTP
+host, username, password, and sender supplied by its inbox, normally port 587
+with `SMTP_TLS=true`. If SMTP is not configured, verification codes are written
+to application logs only when `ENV=dev`.
+
+## Run the backend
 
 ```powershell
-.\venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Run Uvicorn with this virtual-environment Python, not the system `python.exe`.
-The upload handlers for PDF and Word files require the packages in
-`requirements.txt`; if they are missing, the upload is rejected before it is
-recorded in the history.
+API documentation: `http://localhost:8000/docs`.
 
-## Open API docs
+## Authentication endpoints
 
-After starting the backend, open:
-
-```text
-http://localhost:8000/docs
-```
-
-## Main endpoints
-
-### Authentication
-
-- `POST /auth/register`
+- `POST /auth/signup`
+- `POST /auth/verify-email`
+- `POST /auth/resend-code`
 - `POST /auth/login`
-- `GET /auth/me`
+- `POST /auth/forgot-password`
+- `POST /auth/reset-password`
+- `GET` / `PUT /auth/me`
+- `POST /auth/logout`
 
-### Datasets
+Codes expire after 10 minutes, allow five attempts, and are stored as HMAC
+digests. Rate limits return HTTP 429 with `Retry-After`. Existing accounts
+created before email verification can be marked verified after reviewing the
+migration with:
 
-- `GET /datasets`
-- `POST /datasets`
+```sql
+UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;
+```
 
-### Analyses
+The application creates the `email_codes` and `revoked_tokens` tables and adds
+the authentication columns to existing user tables during startup.
 
-- `GET /analyses`
-- `POST /analyses`
+## Tests
 
-## Notes
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
 
-- The backend creates database tables automatically at startup.
-- The project uses PostgreSQL and SQLAlchemy.
-- JWT authentication is enabled for protected routes.
+## Upload formats
 
-## Troubleshooting
+The upload API extracts CSV, XLS/XLSX, PDF, DOC/DOCX, PNG, and JPEG files.
+Image and scanned-PDF OCR also require Tesseract OCR with French and English
+language data on `PATH`. Reading legacy `.doc` files requires LibreOffice,
+antiword, or catdoc; `.docx` files do not require an external converter.
 
-### App does not start
+## Security notes
 
-- Confirm the virtual environment is active.
-- Confirm PostgreSQL is running.
-- Check the `.env` file for a valid `DATABASE_URL`.
-- Reinstall the dependencies if needed.
-
-### Supported upload formats
-
-The upload API extracts data from CSV, XLS/XLSX, PDF, DOC/DOCX, PNG, and JPEG files. Install Python dependencies with `python -m pip install -r requirements.txt`. Image OCR and scanned-PDF OCR also require Tesseract OCR with French and English language data available on `PATH`. Reading legacy `.doc` files requires LibreOffice, antiword, or catdoc; `.docx` files do not need an external converter.
+The frontend currently stores bearer tokens in `localStorage`. Any successful
+cross-site scripting vulnerability can expose these tokens; use strict output
+escaping and a restrictive Content Security Policy, and consider migrating to
+httpOnly cookies with CSRF protection for a higher-assurance deployment.
