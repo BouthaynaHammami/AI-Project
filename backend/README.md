@@ -24,25 +24,19 @@ backend/
 
 - Python 3.11+
 - PostgreSQL installed and running
-- Virtual environment created at:
+- Backend virtual environment at `backend\venv`
 
-```text
-D:\Esprit\5 SAE\IA\AI-Project\.env
-```
+## Use the backend virtual environment
 
-## Create and activate the virtual environment
-
-From the project root:
+From the `backend` directory, activate the project's virtual environment:
 
 ```powershell
-cd "D:\Esprit\5 SAE\IA\AI-Project"
-.\.env\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 ```
 
 ## Install dependencies
 
 ```powershell
-cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
 python -m pip install -r requirements.txt
 ```
 
@@ -59,9 +53,13 @@ FRONTEND_ORIGIN=http://localhost:5173
 ## Start the backend
 
 ```powershell
-cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
-& "D:\Esprit\5 SAE\IA\AI-Project\.env\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.\venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+Run Uvicorn with this virtual-environment Python, not the system `python.exe`.
+The upload handlers for PDF and Word files require the packages in
+`requirements.txt`; if they are missing, the upload is rejected before it is
+recorded in the history.
 
 ## Open API docs
 
