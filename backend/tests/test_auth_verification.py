@@ -16,8 +16,15 @@ from app.core.database import Base, get_db
 from app.core.rate_limit import limiter
 from app.core.security import get_password_hash
 from app.main import app
+from app.models.analysis import Analysis
+from app.models.conversation import Conversation
+from app.models.dataset import Dataset
 from app.models.email_code import EmailCode
+from app.models.feedback import Feedback
+from app.models.share_link import ShareLink
+from app.models.usage_event import UsageEvent
 from app.models.user import User
+from app.services import email_service
 
 test_engine = create_engine(
     "sqlite://",
@@ -72,10 +79,14 @@ def create_verified_account(email: str = "person@example.com") -> str:
     return verified.json()["access_token"]
 
 
-def test_signup_stores_only_hash_and_verification_returns_token():
+def test_signup_stores_only_hash_and_verification_returns_token(monkeypatch):
+    monkeypatch.setenv("ENV", "dev")
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
     response = signup()
 
     assert response.status_code == 202
+    assert response.json()["delivery_mode"] == "console"
     assert "access_token" not in response.json()
     assert len(sent_codes) == 1
     email, code, purpose = sent_codes[0]
@@ -96,6 +107,35 @@ def test_signup_stores_only_hash_and_verification_returns_token():
     with TestSession() as db:
         assert db.query(User).filter_by(email=email).one().is_verified is True
         assert db.query(EmailCode).count() == 0
+
+
+def test_signup_reports_smtp_failure_and_removes_undeliverable_code(monkeypatch):
+    def fail_delivery(*_args):
+        raise RuntimeError("SMTP unavailable")
+
+    monkeypatch.setattr(auth_api, "send_email_code", fail_delivery)
+    response = signup()
+
+    assert response.status_code == 503
+    assert "configuration SMTP" in response.json()["detail"]
+    with TestSession() as db:
+        assert db.query(EmailCode).count() == 0
+
+
+def test_signup_with_unavailable_local_smtp_returns_console_delivery_mode(monkeypatch):
+    monkeypatch.setenv("ENV", "dev")
+    monkeypatch.setenv("SMTP_HOST", "localhost")
+    monkeypatch.setenv("SMTP_PORT", "1025")
+    monkeypatch.setenv("SMTP_FROM", "AI Data Analyst <no-reply@localhost>")
+    monkeypatch.setenv("SMTP_TLS", "false")
+    monkeypatch.setattr(auth_api, "send_email_code", email_service.send_email_code)
+
+    response = signup()
+
+    assert response.status_code == 202
+    assert response.json()["delivery_mode"] == "console"
+    with TestSession() as db:
+        assert db.query(EmailCode).count() == 1
 
 
 def test_fifth_incorrect_code_attempt_invalidates_code():
@@ -210,6 +250,116 @@ def test_forgot_password_is_anti_enumerating_and_reset_revokes_sessions():
         "/auth/login",
         json={"email": "person@example.com", "password": "NewStrongPass456"},
     ).status_code == 200
+
+
+def test_account_deletion_requires_correct_current_password():
+    token = create_verified_account()
+    response = client.request(
+        "DELETE",
+        "/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "WrongPass123"},
+    )
+
+    assert response.status_code == 400
+    with TestSession() as db:
+        assert db.query(User).filter_by(email="person@example.com").one()
+    assert client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_account_deletion_removes_related_data_and_uploads_only_for_account(tmp_path, monkeypatch):
+    owner_token = create_verified_account()
+    other_token = create_verified_account("other@example.com")
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    uploaded_file = upload_dir / "owner.csv"
+    uploaded_file.write_text("value\n1\n", encoding="utf-8")
+    monkeypatch.setattr(auth_api, "UPLOAD_DIR", upload_dir)
+
+    with TestSession() as db:
+        owner = db.query(User).filter_by(email="person@example.com").one()
+        other = db.query(User).filter_by(email="other@example.com").one()
+        owner_dataset = Dataset(
+            user_id=owner.id,
+            filename="owner.csv",
+            file_path=str(uploaded_file),
+            file_type="csv",
+            row_count=1,
+            column_count=1,
+        )
+        other_dataset = Dataset(
+            user_id=other.id,
+            filename="other.csv",
+            file_path=str(upload_dir / "other.csv"),
+            file_type="csv",
+            row_count=1,
+            column_count=1,
+        )
+        db.add_all([owner_dataset, other_dataset])
+        db.flush()
+
+        owner_conversation = Conversation(user_id=owner.id, title="Owner", dataset_ids="[]")
+        db.add(owner_conversation)
+        db.flush()
+        owner_analysis = Analysis(
+            user_id=owner.id,
+            conversation_id=owner_conversation.id,
+            dataset_id=owner_dataset.id,
+            question="Question",
+            answer="Answer",
+            result_type="text",
+        )
+        other_analysis = Analysis(
+            user_id=other.id,
+            dataset_id=other_dataset.id,
+            question="Question",
+            answer="Answer",
+            result_type="text",
+        )
+        db.add_all([owner_analysis, other_analysis])
+        db.flush()
+        db.add_all([
+            Feedback(analysis_id=owner_analysis.id, user_id=owner.id, rating=1),
+            ShareLink(
+                analysis_id=owner_analysis.id,
+                token_hash="owner-share-token-hash",
+                created_by=owner.id,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            ),
+            UsageEvent(user_id=owner.id, type="analysis", status="success"),
+            EmailCode(
+                user_id=owner.id,
+                purpose="reset",
+                code_hash="a" * 64,
+                created_at=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            ),
+        ])
+        db.commit()
+
+    response = client.request(
+        "DELETE",
+        "/auth/me",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"current_password": "StrongPass123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["files_cleanup_pending"] == 0
+    assert not uploaded_file.exists()
+    assert client.get("/auth/me", headers={"Authorization": f"Bearer {owner_token}"}).status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": f"Bearer {other_token}"}).status_code == 200
+    with TestSession() as db:
+        other_user_id = db.query(User.id).filter_by(email="other@example.com").scalar()
+        assert db.query(User).filter_by(email="person@example.com").count() == 0
+        assert other_user_id is not None
+        assert db.query(Dataset).filter_by(user_id=other_user_id).count() == 1
+        assert db.query(Analysis).filter_by(user_id=other_user_id).count() == 1
+        assert db.query(Feedback).count() == 0
+        assert db.query(ShareLink).count() == 0
+        assert db.query(UsageEvent).count() == 0
+        assert db.query(EmailCode).count() == 0
+        assert db.query(Conversation).count() == 0
 
 
 def test_email_change_keeps_old_address_until_code_is_verified():

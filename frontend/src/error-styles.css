@@ -18,3 +18,8 @@
   position: static;
   box-shadow: 0 4px 12px #991b1b12;
 }
+
+.settings-page .error-banner {
+  position: static;
+  margin-bottom: 14px;
+}

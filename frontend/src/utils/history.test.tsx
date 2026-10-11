@@ -27,34 +27,35 @@ const item = (id: number, date: Date): HistoryEntry => ({
   isFavorite: false,
 })
 
-const sampleAnalysis = vi.hoisted(() => ({
+const sampleConversation = vi.hoisted(() => ({
   id: 24,
-  conversation_id: null,
-  conversation_title: null,
-  conversation_dataset_ids: [2],
-  dataset_id: 2,
-  question: 'Quelle région a le plus de ventes ?',
-  answer: 'Nord.',
-  result_type: 'text',
-  result_data: null,
-  chart_config: null,
-  generated_code: null,
-  code_explanation: null,
-  code_retried: false,
-  feedback: null,
-  title: null,
+  title: 'Quelle région a le plus de ventes ?',
+  dataset_ids: [2],
   is_favorite: false,
   created_at: '2026-10-04T10:00:00Z',
+  updated_at: '2026-10-04T10:00:00Z',
 }))
+const conversationStore = vi.hoisted(() => ({
+  items: [] as Array<{
+    id: number
+    title: string
+    dataset_ids: number[]
+    is_favorite: boolean
+    created_at: string
+    updated_at: string
+  }>,
+}))
+conversationStore.items = [sampleConversation]
 
 vi.mock('../services/analysisService', () => ({
-  askQuestion: vi.fn(),
-  deleteAnalysis: vi.fn().mockResolvedValue(undefined),
-  deleteFeedback: vi.fn(),
-  getHistory: vi.fn().mockResolvedValue({ items: [sampleAnalysis], total: 1, has_more: false }),
-  restoreAnalysis: vi.fn().mockResolvedValue(sampleAnalysis),
-  saveFeedback: vi.fn(),
-  updateAnalysis: vi.fn().mockResolvedValue(sampleAnalysis),
+  addConversationMessage: vi.fn(),
+  createConversation: vi.fn().mockResolvedValue(sampleConversation),
+  deleteConversation: vi.fn().mockImplementation(async (id: number) => {
+    conversationStore.items = conversationStore.items.filter((conversation) => conversation.id !== id)
+  }),
+  getConversation: vi.fn().mockResolvedValue({ ...sampleConversation, messages: [] }),
+  getConversations: vi.fn().mockImplementation(async () => conversationStore.items),
+  updateConversation: vi.fn().mockResolvedValue(sampleConversation),
 }))
 
 vi.mock('../services/fileService', () => ({
@@ -67,6 +68,7 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.clearAllMocks()
+  conversationStore.items = [sampleConversation]
 })
 
 describe('groupByDate', () => {
@@ -186,29 +188,20 @@ describe('history interactions', () => {
     expect(onCancelRename).toHaveBeenCalledTimes(2)
   })
 
-  it('removes an analysis optimistically and restores it from the undo action', async () => {
+  it('deletes a conversation and removes it from history', async () => {
     const { result } = renderHook(() => useDemoData())
     await waitFor(() => expect(result.current.history).toHaveLength(1))
     const entry = result.current.history[0]
 
     await act(async () => { await result.current.remove(entry) })
     expect(result.current.history).toHaveLength(0)
-    expect(result.current.undoEntry?.analysisId).toBe(24)
-
-    await act(async () => { await result.current.undoRemove() })
-    await waitFor(() => expect(result.current.history).toHaveLength(1))
-    expect(result.current.undoEntry).toBeNull()
+    expect(entry.conversationId).toBe(24)
   })
 
-  it('keeps a removal final after the five-second undo window', async () => {
+  it('keeps conversation deletion final after the action completes', async () => {
     const { result } = renderHook(() => useDemoData())
     await waitFor(() => expect(result.current.history).toHaveLength(1))
-    vi.useFakeTimers()
     await act(async () => { await result.current.remove(result.current.history[0]) })
-    expect(result.current.history).toHaveLength(0)
-
-    act(() => { vi.advanceTimersByTime(5000) })
-    expect(result.current.undoEntry).toBeNull()
     expect(result.current.history).toHaveLength(0)
   })
 })

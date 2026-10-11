@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
@@ -84,6 +84,26 @@ class VerifyEmailRequest(EmailCodeRequest):
 
 class SignupAccepted(BaseModel):
     message: str
+    delivery_mode: Literal["email", "console", "unavailable"] | None = None
+
+
+class AccountDeleteRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+
+    @field_validator("current_password")
+    @classmethod
+    def validate_current_password_length(cls, password: str) -> str:
+        if len(password.encode("utf-8")) > 72:
+            raise PydanticCustomError(
+                "password_too_long",
+                "Le mot de passe actuel ne doit pas dépasser 72 octets.",
+            )
+        return password
+
+
+class AccountDeleteResponse(BaseModel):
+    message: str
+    files_cleanup_pending: int = 0
 
 
 class UserUpdate(BaseModel):

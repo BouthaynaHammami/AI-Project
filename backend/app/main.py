@@ -8,6 +8,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.api.analyses import router as analyses_router
+from app.api.conversations import router as conversations_router
 from app.api.auth import router as auth_router
 from app.api.datasets import router as datasets_router
 from app.api.shares import analysis_router as shares_router, public_router
@@ -41,6 +42,8 @@ if engine.url.get_backend_name() == "postgresql":
         connection.execute(text("ALTER TABLE analyses ADD COLUMN IF NOT EXISTS title VARCHAR(120)"))
         connection.execute(text("ALTER TABLE analyses ADD COLUMN IF NOT EXISTS is_favorite BOOLEAN NOT NULL DEFAULT FALSE"))
         connection.execute(text("ALTER TABLE analyses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+        connection.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_favorite BOOLEAN NOT NULL DEFAULT FALSE"))
+        connection.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"))
         foreign_keys = inspect(connection).get_foreign_keys("analyses")
         dataset_fk = next(
             (item for item in foreign_keys if item.get("constrained_columns") == ["dataset_id"]),
@@ -110,6 +113,14 @@ elif engine.url.get_backend_name() == "sqlite":
         with engine.begin() as connection:
             for statement in missing_analysis_columns:
                 connection.execute(text(statement))
+    conversation_columns = {column["name"] for column in inspect(engine).get_columns("conversations")}
+    if "is_favorite" not in conversation_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE conversations ADD COLUMN is_favorite BOOLEAN NOT NULL DEFAULT 0"))
+    if "updated_at" not in conversation_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE conversations ADD COLUMN updated_at DATETIME"))
+            connection.execute(text("UPDATE conversations SET updated_at = created_at WHERE updated_at IS NULL"))
     analysis_columns = {column["name"]: column for column in inspect(engine).get_columns("analyses")}
     analysis_foreign_keys = inspect(engine).get_foreign_keys("analyses")
     dataset_fk = next(
@@ -235,6 +246,7 @@ async def add_security_headers(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(datasets_router)
 app.include_router(analyses_router)
+app.include_router(conversations_router)
 app.include_router(shares_router)
 app.include_router(public_router)
 app.include_router(usage_router)

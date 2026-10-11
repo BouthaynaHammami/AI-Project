@@ -1,33 +1,70 @@
 import { api } from './api'
-import type { Feedback } from '../types'
 
-export type AnalysisAnswer = { id: number; conversation_id: number; dataset_id: number; question: string; type: 'text'; content: string; chart_config: string | null; generated_code: string | null; code_explanation: string | null; code_retried: boolean; feedback: Feedback | null; created_at: string }
-export type AnalysisHistory = { id: number; conversation_id: number | null; conversation_title: string | null; conversation_dataset_ids: number[]; dataset_id: number | null; question: string; answer: string; result_type: string; result_data: string | null; chart_config: string | null; generated_code: string | null; code_explanation: string | null; code_retried: boolean; feedback: Feedback | null; title: string | null; is_favorite: boolean; created_at: string }
+export type Feedback = { id?: number; rating: -1 | 1; comment: string | null }
+export type AnalysisAnswer = {
+  id: number
+  conversation_id?: number
+  dataset_id: number
+  question: string
+  type: 'text'
+  content: string
+  result_data?: string | null
+  chart_config: string | null
+  generated_code?: string | null
+  code_explanation?: string | null
+  code_retried?: boolean
+  feedback?: Feedback | null
+  created_at: string
+}
+export type ConversationSummary = {
+  id: number
+  title: string
+  dataset_ids: number[]
+  is_favorite: boolean
+  created_at: string
+  updated_at: string
+}
+export type ConversationMessage = {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  result_data?: {
+    chart_config?: string | null
+    result_data?: string | null
+    generated_code?: string | null
+    code_explanation?: string | null
+    code_retried?: boolean
+  } | null
+  created_at: string
+}
+export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] }
+export type AnalysisHistory = {
+  id: number
+  conversation_id?: number | null
+  conversation_title?: string | null
+  conversation_dataset_ids?: number[]
+  dataset_id: number | null
+  question: string
+  answer: string
+  result_type: string
+  result_data: string | null
+  chart_config: string | null
+  generated_code?: string | null
+  code_explanation?: string | null
+  code_retried?: boolean
+  feedback?: Feedback | null
+  title?: string | null
+  is_favorite?: boolean
+  created_at: string
+}
+export type AnalysisHistoryPage = { items: AnalysisHistory[]; total: number; has_more: boolean }
 export type SuggestedQuestion = {
   question: string
   category: 'classement' | 'evolution' | 'comparaison' | 'repartition' | 'qualite' | 'synthese'
   chart: boolean
 }
-export type AnalysisSuggestions = {
-  suggestions: SuggestedQuestion[]
-  source: 'ai' | 'rules' | 'cache'
-}
-export type AnalysisFeedbackStats = {
-  like_rate: number
-  total_votes: number
-  recent_negative_questions: { question: string; created_at: string }[]
-}
-export type ShareLinkSummary = {
-  id: number
-  created_at: string
-  expires_at: string
-  view_count: number
-}
-export type CreatedShareLink = {
-  id: number
-  token: string
-  expires_at: string
-}
+export type ShareLinkSummary = { id: number; expires_at: string; view_count: number }
+export type ShareLinkCreated = { id: number; token: string; expires_at: string }
 export type PublicSharedAnalysis = {
   question: string
   answer: string
@@ -35,30 +72,53 @@ export type PublicSharedAnalysis = {
   created_at: string
 }
 
-export async function askQuestion(datasetIds: number[], question: string, conversationId: number | null = null) {
-  const { data } = await api.post<AnalysisAnswer>('/analysis/ask', {
+export async function askQuestion(datasetIds: number[], question: string) {
+  const { data } = await api.post<AnalysisAnswer>('/analysis/ask', { dataset_ids: datasetIds, question })
+  return data
+}
+
+export async function getConversations(params: { q?: string; favorite?: boolean } = {}) {
+  const { data } = await api.get<ConversationSummary[]>('/conversations', { params })
+  return data
+}
+
+export async function createConversation(datasetIds: number[] = []) {
+  const { data } = await api.post<ConversationSummary>('/conversations', { dataset_ids: datasetIds })
+  return data
+}
+
+export async function getConversation(conversationId: number) {
+  const { data } = await api.get<ConversationDetail>(`/conversations/${conversationId}`)
+  return data
+}
+
+export async function addConversationMessage(conversationId: number, datasetIds: number[], question: string) {
+  const { data } = await api.post<AnalysisAnswer>(`/conversations/${conversationId}/messages`, {
     dataset_ids: datasetIds,
     question,
-    conversation_id: conversationId,
   })
   return data
 }
 
-export type AnalysisHistoryPage = { items: AnalysisHistory[]; total: number; has_more: boolean }
-
-export async function getHistory(
-  params: { q?: string; favorite?: boolean; limit?: number; offset?: number } = {},
-  signal?: AbortSignal,
+export async function updateConversation(
+  conversationId: number,
+  update: { title?: string; is_favorite?: boolean; dataset_ids?: number[] },
 ) {
-  const { data } = await api.get<AnalysisHistoryPage>('/analysis/history', { params, signal })
+  const { data } = await api.patch<ConversationSummary>(`/conversations/${conversationId}`, update)
   return data
 }
 
-export async function updateAnalysis(
-  analysisId: number,
-  patch: { title?: string | null; is_favorite?: boolean },
-) {
-  const { data } = await api.patch<AnalysisHistory>(`/analysis/${analysisId}`, patch)
+export async function deleteConversation(conversationId: number) {
+  await api.delete(`/conversations/${conversationId}`)
+}
+
+export async function getHistory(params: { q?: string; favorite?: boolean; limit?: number; offset?: number } = {}) {
+  const { data } = await api.get<AnalysisHistoryPage>('/analysis/history', { params })
+  return data
+}
+
+export async function updateAnalysis(analysisId: number, update: { title?: string | null; is_favorite?: boolean }) {
+  const { data } = await api.patch<AnalysisHistory>(`/analysis/${analysisId}`, update)
   return data
 }
 
@@ -71,8 +131,8 @@ export async function restoreAnalysis(analysisId: number) {
   return data
 }
 
-export async function saveFeedback(analysisId: number, rating: 1 | -1, comment: string | null) {
-  const { data } = await api.put<Feedback>(`/analysis/${analysisId}/feedback`, { rating, comment })
+export async function saveFeedback(analysisId: number, feedback: Omit<Feedback, 'id'>) {
+  const { data } = await api.put<Feedback>(`/analysis/${analysisId}/feedback`, feedback)
   return data
 }
 
@@ -80,33 +140,13 @@ export async function deleteFeedback(analysisId: number) {
   await api.delete(`/analysis/${analysisId}/feedback`)
 }
 
-export async function getFeedbackStats() {
-  const { data } = await api.get<AnalysisFeedbackStats>('/analysis/stats')
-  return data
-}
-
-export async function getSuggestions(datasetIds: number[], refresh = false, signal?: AbortSignal) {
-  const { data } = await api.get<AnalysisSuggestions>('/analysis/suggestions', {
-    params: { dataset_ids: datasetIds.join(','), refresh },
-    signal,
-  })
-  return data
-}
-
-export async function exportAnalysis(analysisId: number, format: 'pdf' | 'xlsx') {
-  const response = await api.get<Blob>(`/analysis/${analysisId}/export`, {
-    params: { format },
-    responseType: 'blob',
-  })
-  const disposition = response.headers['content-disposition'] as string | undefined
-  const filename = disposition?.match(/filename="?([^";]+)"?/i)?.[1] ?? `analyse-${analysisId}.${format}`
-  return { blob: response.data, filename }
+export async function getSuggestions(datasetIds: number[]) {
+  const { data } = await api.post<{ suggestions: SuggestedQuestion[] }>('/analysis/suggestions', { dataset_ids: datasetIds })
+  return data.suggestions
 }
 
 export async function createShareLink(analysisId: number, expiresInDays: 1 | 7 | 30) {
-  const { data } = await api.post<CreatedShareLink>(`/analysis/${analysisId}/share`, {
-    expires_in_days: expiresInDays,
-  })
+  const { data } = await api.post<ShareLinkCreated>(`/analysis/${analysisId}/share`, { expires_in_days: expiresInDays })
   return data
 }
 
@@ -119,12 +159,7 @@ export async function revokeShareLink(analysisId: number, shareId: number) {
   await api.delete(`/analysis/${analysisId}/share/${shareId}`)
 }
 
-export async function getPublicSharedAnalysis(token: string): Promise<PublicSharedAnalysis> {
-  const baseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/\/+$/, '')
-  const response = await fetch(
-    `${baseUrl}/public/analysis/${encodeURIComponent(token)}`,
-    { headers: { Accept: 'application/json' }, cache: 'no-store' },
-  )
-  if (!response.ok) throw new Error('Cette analyse partagée est introuvable ou n’est plus disponible.')
-  return response.json() as Promise<PublicSharedAnalysis>
+export async function getPublicSharedAnalysis(token: string) {
+  const { data } = await api.get<PublicSharedAnalysis>(`/public/analysis/${encodeURIComponent(token)}`)
+  return data
 }

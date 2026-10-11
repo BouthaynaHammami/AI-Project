@@ -68,6 +68,7 @@ class AnalysisAskResponse(BaseModel):
     question: str
     type: str
     content: str
+    result_data: str | None = None
     chart_config: str | None = None
     generated_code: str | None = None
     code_explanation: str | None = None

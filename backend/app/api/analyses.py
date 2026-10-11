@@ -19,6 +19,7 @@ from app.models.analysis import Analysis
 from app.models.conversation import Conversation
 from app.models.dataset import Dataset
 from app.models.feedback import Feedback
+from app.models.message import Message
 from app.models.user import User
 from app.schemas.analysis import (
     AnalysisAskResponse,
@@ -444,6 +445,12 @@ def ask_question(
         db.flush()
     else:
         conversation.dataset_ids = json.dumps(dataset_ids)
+        if conversation.title == "Nouvelle analyse" and not db.query(Analysis.id).filter(
+            Analysis.conversation_id == conversation.id,
+            Analysis.user_id == current_user.id,
+        ).first():
+            conversation.title = question[:80]
+    conversation.updated_at = datetime.now(timezone.utc)
 
     record = Analysis(
         user_id=current_user.id,
@@ -460,6 +467,24 @@ def ask_question(
     )
 
     db.add(record)
+    db.flush()
+    legacy_analyses = (
+        db.query(Analysis)
+        .filter(
+            Analysis.conversation_id == conversation.id,
+            Analysis.user_id == current_user.id,
+            Analysis.id != record.id,
+            Analysis.deleted_at.is_(None),
+        )
+        .order_by(Analysis.created_at, Analysis.id)
+        .all()
+    )
+    for previous in legacy_analyses:
+        has_messages = db.query(Message.id).filter(Message.analysis_id == previous.id).first()
+        if has_messages:
+            continue
+        _store_analysis_messages(db, conversation.id, previous)
+    _store_analysis_messages(db, conversation.id, record)
     add_usage_event(
         db,
         current_user.id,
@@ -478,12 +503,43 @@ def ask_question(
         "question": record.question,
         "type": "text",
         "content": record.answer,
+        "result_data": record.result_data,
         "chart_config": record.chart_config,
         "generated_code": record.generated_code,
         "code_explanation": record.code_explanation,
         "code_retried": record.code_retried,
         "created_at": record.created_at,
     }
+
+
+def _store_analysis_messages(db: Session, conversation_id: int, analysis: Analysis) -> None:
+    result_data = json.dumps(
+        {
+            "chart_config": analysis.chart_config,
+            "result_data": analysis.result_data,
+            "generated_code": analysis.generated_code,
+            "code_explanation": analysis.code_explanation,
+            "code_retried": analysis.code_retried,
+        },
+        ensure_ascii=False,
+    )
+    db.add_all([
+        Message(
+            conversation_id=conversation_id,
+            analysis_id=analysis.id,
+            role="user",
+            content=analysis.question,
+            created_at=analysis.created_at,
+        ),
+        Message(
+            conversation_id=conversation_id,
+            analysis_id=analysis.id,
+            role="assistant",
+            content=analysis.answer,
+            result_data=result_data,
+            created_at=analysis.created_at,
+        ),
+    ])
 
 
 def _analysis_history_item(analysis: Analysis, db: Session, current_user: User) -> AnalysisResponse:

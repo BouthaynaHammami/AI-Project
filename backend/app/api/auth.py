@@ -1,4 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+import logging
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -14,9 +17,18 @@ from app.core.security import (
     revoke_user_tokens,
     verify_password,
 )
+from app.models.analysis import Analysis
+from app.models.conversation import Conversation
+from app.models.dataset import Dataset
 from app.models.email_code import EmailCode
+from app.models.feedback import Feedback
+from app.models.message import Message
+from app.models.share_link import ShareLink
+from app.models.usage_event import UsageEvent
 from app.models.user import User
 from app.schemas.auth import (
+    AccountDeleteRequest,
+    AccountDeleteResponse,
     EmailCodeRequest,
     PasswordResetRequest,
     SignupAccepted,
@@ -28,8 +40,14 @@ from app.schemas.auth import (
     VerifyEmailRequest,
 )
 from app.services.email_code_service import consume_email_code, issue_email_code
-from app.services.email_service import send_email_code
+from app.services.email_service import (
+    EmailDeliveryMode,
+    get_email_delivery_mode,
+    send_email_code,
+)
+from app.services.file_service import UPLOAD_DIR
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 SIGNUP_ACCEPTED_MESSAGE = "Si cette adresse peut être traitée, un email contenant un code a été envoyé."
 
@@ -40,12 +58,33 @@ def login_rate_key(request: Request) -> str:
     return f"{client_ip}:{email}" if email else client_ip
 
 
+def _deliver_email_code(
+    db: Session,
+    user: User,
+    recipient: str,
+    code: str,
+    purpose: str,
+) -> EmailDeliveryMode:
+    try:
+        delivery_mode = send_email_code(recipient, code, purpose)
+    except RuntimeError as exc:
+        db.query(EmailCode).filter(
+            EmailCode.user_id == user.id,
+            EmailCode.purpose == purpose,
+        ).delete(synchronize_session=False)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Impossible d’envoyer le code. Vérifiez la configuration SMTP du serveur.",
+        ) from exc
+    return delivery_mode or get_email_delivery_mode()
+
+
 @router.post("/signup", response_model=SignupAccepted, status_code=status.HTTP_202_ACCEPTED)
 @limiter.limit("5/hour")
 def register(
     request: Request,
     user_data: UserCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     normalized_email = str(user_data.email).lower()
@@ -75,8 +114,11 @@ def register(
 
     db.flush()
     code = issue_email_code(db, user, "verify")
-    background_tasks.add_task(send_email_code, user.email, code, "verify")
-    return {"message": "Un code de vérification a été envoyé à votre adresse email."}
+    delivery_mode = _deliver_email_code(db, user, user.email, code, "verify")
+    return {
+        "message": "Un code de vérification a été envoyé à votre adresse email.",
+        "delivery_mode": delivery_mode,
+    }
 
 
 @router.post("/verify-email", response_model=Token)
@@ -110,10 +152,10 @@ def verify_email(
 def resend_code(
     request: Request,
     payload: EmailCodeRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     normalized_email = str(payload.email).lower()
+    delivery_mode = get_email_delivery_mode()
     user = db.query(User).filter(
         or_(User.email == normalized_email, User.pending_email == normalized_email)
     ).first()
@@ -125,8 +167,8 @@ def resend_code(
             if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
                 raise
         else:
-            background_tasks.add_task(send_email_code, send_address, code, "verify")
-    return {"message": SIGNUP_ACCEPTED_MESSAGE}
+            delivery_mode = _deliver_email_code(db, user, send_address, code, "verify")
+    return {"message": SIGNUP_ACCEPTED_MESSAGE, "delivery_mode": delivery_mode}
 
 
 @router.post("/login", response_model=Token)
@@ -171,9 +213,9 @@ def login(request: Request, login_data: UserLogin, db: Session = Depends(get_db)
 def forgot_password(
     request: Request,
     payload: EmailCodeRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    delivery_mode = get_email_delivery_mode()
     user = db.query(User).filter(User.email == str(payload.email).lower()).first()
     if user is not None and user.is_verified:
         try:
@@ -182,8 +224,8 @@ def forgot_password(
             if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
                 raise
         else:
-            background_tasks.add_task(send_email_code, user.email, code, "reset")
-    return {"message": SIGNUP_ACCEPTED_MESSAGE}
+            delivery_mode = _deliver_email_code(db, user, user.email, code, "reset")
+    return {"message": SIGNUP_ACCEPTED_MESSAGE, "delivery_mode": delivery_mode}
 
 
 @router.post("/reset-password", response_model=SignupAccepted)
@@ -204,10 +246,74 @@ def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
+@router.delete("/me", response_model=AccountDeleteResponse)
+def delete_me(
+    payload: AccountDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Le mot de passe actuel est incorrect.")
+
+    user_id = current_user.id
+    analyses = db.query(Analysis.id).filter(Analysis.user_id == user_id).all()
+    analysis_ids = [analysis_id for (analysis_id,) in analyses]
+    datasets = db.query(Dataset).filter(Dataset.user_id == user_id).all()
+    upload_root = Path(UPLOAD_DIR).resolve()
+    upload_paths: set[Path] = set()
+    files_cleanup_pending = 0
+    for dataset in datasets:
+        file_path = Path(dataset.file_path).resolve()
+        if file_path != upload_root and file_path.is_relative_to(upload_root):
+            upload_paths.add(file_path)
+        else:
+            files_cleanup_pending += 1
+
+    try:
+        db.query(EmailCode).filter(EmailCode.user_id == user_id).delete(synchronize_session=False)
+        db.query(UsageEvent).filter(UsageEvent.user_id == user_id).delete(synchronize_session=False)
+        conversation_ids = [
+            conversation_id
+            for (conversation_id,) in db.query(Conversation.id).filter(Conversation.user_id == user_id).all()
+        ]
+        if conversation_ids:
+            db.query(Message).filter(Message.conversation_id.in_(conversation_ids)).delete(synchronize_session=False)
+        db.query(Conversation).filter(Conversation.user_id == user_id).delete(synchronize_session=False)
+        feedback_query = db.query(Feedback).filter(Feedback.user_id == user_id)
+        share_link_query = db.query(ShareLink).filter(ShareLink.created_by == user_id)
+        if analysis_ids:
+            feedback_query = db.query(Feedback).filter(
+                or_(Feedback.user_id == user_id, Feedback.analysis_id.in_(analysis_ids))
+            )
+            share_link_query = db.query(ShareLink).filter(
+                or_(ShareLink.created_by == user_id, ShareLink.analysis_id.in_(analysis_ids))
+            )
+        feedback_query.delete(synchronize_session=False)
+        share_link_query.delete(synchronize_session=False)
+        db.query(Analysis).filter(Analysis.user_id == user_id).delete(synchronize_session=False)
+        db.query(Dataset).filter(Dataset.user_id == user_id).delete(synchronize_session=False)
+        db.delete(current_user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    for file_path in upload_paths:
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError:
+            files_cleanup_pending += 1
+            logger.exception("Could not remove an uploaded file during account deletion.")
+
+    return {
+        "message": "Votre compte et ses données ont été supprimés.",
+        "files_cleanup_pending": files_cleanup_pending,
+    }
+
+
 @router.put("/me", response_model=UserPublic)
 def update_me(
     user_data: UserUpdate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -248,7 +354,9 @@ def update_me(
     if issue_verification_code:
         db.flush()
         code = issue_email_code(db, current_user, "verify")
-        background_tasks.add_task(send_email_code, current_user.pending_email, code, "verify")
+        if current_user.pending_email is None:
+            raise HTTPException(status_code=400, detail="Aucune adresse email en attente de vérification.")
+        _deliver_email_code(db, current_user, current_user.pending_email, code, "verify")
     else:
         db.commit()
     db.refresh(current_user)

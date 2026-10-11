@@ -1,11 +1,21 @@
 import logging
 import os
 import smtplib
+from typing import Literal
 from pathlib import Path
 from email.message import EmailMessage
 
 logger = logging.getLogger(__name__)
 LOGO_PATH = Path(__file__).resolve().parents[3] / "ai-data-analyst-icon.jpg"
+EmailDeliveryMode = Literal["email", "console", "unavailable"]
+
+
+def get_email_delivery_mode() -> EmailDeliveryMode:
+    if os.getenv("SMTP_HOST", "").strip() and os.getenv("SMTP_FROM", "").strip():
+        return "email"
+    if os.getenv("ENV", "").lower() == "dev":
+        return "console"
+    return "unavailable"
 
 
 def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
@@ -118,13 +128,13 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
     return subject, plain_text, html
 
 
-def send_email_code(recipient: str, code: str, purpose: str) -> None:
+def send_email_code(recipient: str, code: str, purpose: str) -> EmailDeliveryMode:
     host = os.getenv("SMTP_HOST", "").strip()
     sender = os.getenv("SMTP_FROM", "").strip()
     if not host or not sender:
         if os.getenv("ENV", "").lower() == "dev":
             logger.warning("Development email code for %s (%s): %s", recipient, purpose, code)
-            return
+            return "console"
         logger.error("Email delivery is not configured.")
         raise RuntimeError("Email delivery is not configured.")
 
@@ -162,5 +172,16 @@ def send_email_code(recipient: str, code: str, purpose: str) -> None:
                 server.login(username, password)
             server.send_message(message)
     except (OSError, smtplib.SMTPException) as exc:
+        if os.getenv("ENV", "").lower() == "dev":
+            logger.warning(
+                "SMTP delivery failed for %s (%s); development email code for %s (%s): %s",
+                recipient,
+                type(exc).__name__,
+                recipient,
+                purpose,
+                code,
+            )
+            return "console"
         logger.error("SMTP delivery failed (%s).", type(exc).__name__)
         raise RuntimeError("SMTP delivery failed.") from exc
+    return "email"

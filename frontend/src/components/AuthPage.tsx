@@ -1,13 +1,14 @@
-import { ArrowLeft, ArrowRight, BarChart3, Check, LockKeyhole } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BarChart3, Check, Eye, EyeOff, LockKeyhole } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import type { SignupAccepted } from '../services/authService'
 
 type Props = {
   type: 'signup' | 'login'
   onBack: () => void
-  onSubmit: (name: string, email: string, password: string) => Promise<void>
+  onSubmit: (name: string, email: string, password: string) => Promise<SignupAccepted | void>
   onVerifyEmail: (email: string, code: string) => Promise<void>
-  onResendCode: (email: string) => Promise<void>
-  onForgotPassword: (email: string) => Promise<void>
+  onResendCode: (email: string) => Promise<SignupAccepted>
+  onForgotPassword: (email: string) => Promise<SignupAccepted>
   onResetPassword: (email: string, code: string, password: string) => Promise<void>
   onSwitch: (type: 'signup' | 'login') => void
 }
@@ -23,6 +24,59 @@ function passwordStrength(password: string) {
     /[^A-Za-z0-9]/.test(password),
   ].filter(Boolean).length
   return { score, label: score < 2 ? 'Faible' : score < 4 ? 'Moyen' : 'Fort' }
+}
+
+function passwordDeliveryNotice(response?: SignupAccepted) {
+  if (response?.delivery_mode === 'console') {
+    return 'L’envoi par email a échoué. En mode développement, le code est affiché dans le terminal du backend. Vérifiez la configuration SMTP et consultez les courriers indésirables.'
+  }
+  if (response?.delivery_mode === 'unavailable') {
+    return 'Le service email n’est pas configuré. Demandez à l’administrateur de configurer le serveur SMTP.'
+  }
+  if (response?.delivery_mode === 'email') {
+    return 'Si cette adresse est associée à un compte, un email contenant un code a été envoyé. Vérifiez aussi vos courriers indésirables.'
+  }
+  return 'Si cette adresse est associée à un compte, un email contenant un code sera envoyé.'
+}
+
+function PasswordField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  autoComplete,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  autoComplete: string
+}) {
+  const [visible, setVisible] = useState(false)
+  const ToggleIcon = visible ? EyeOff : Eye
+  return (
+    <label className="auth-password-field">
+      {label}
+      <span className="auth-password-input-wrap">
+        <input
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+        />
+        <button
+          type="button"
+          className="password-visibility-toggle"
+          aria-label={visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+          aria-pressed={visible}
+          onClick={() => setVisible((current) => !current)}
+        >
+          <ToggleIcon size={16} aria-hidden="true" />
+        </button>
+      </span>
+    </label>
+  )
 }
 
 export function AuthPage({
@@ -55,15 +109,16 @@ export function AuthPage({
     return () => window.clearTimeout(timer)
   }, [resendSeconds])
 
-  const startVerification = async (resend: boolean) => {
+  const startVerification = async (resend: boolean, response?: SignupAccepted) => {
     setStep('verify-email')
     setOtp(['', '', '', '', '', ''])
     setResendSeconds(60)
     setError('')
-    setNotice(resend ? '' : 'Un code de vérification a été envoyé à votre adresse email.')
+    setNotice(resend ? '' : passwordDeliveryNotice(response))
     if (resend) {
       try {
-        await onResendCode(email.trim())
+        const result = await onResendCode(email.trim())
+        setNotice(passwordDeliveryNotice(result))
       } catch (sendError) {
         setError(sendError instanceof Error ? sendError.message : 'Impossible de renvoyer le code.')
       }
@@ -115,8 +170,8 @@ export function AuthPage({
 
     setLoading(true)
     try {
-      await onSubmit(name.trim(), email.trim(), password)
-      if (isSignup) await startVerification(false)
+      const result = await onSubmit(name.trim(), email.trim(), password)
+      if (isSignup) await startVerification(false, result || undefined)
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : 'Une erreur est survenue.'
       if (!isSignup && message === 'EMAIL_NOT_VERIFIED') {
@@ -170,10 +225,11 @@ export function AuthPage({
     setNotice('')
     setLoading(true)
     try {
-      if (step === 'reset-password') await onForgotPassword(email.trim())
-      else await onResendCode(email.trim())
+      const result = step === 'reset-password'
+        ? await onForgotPassword(email.trim())
+        : await onResendCode(email.trim())
       setResendSeconds(60)
-      setNotice('Si cette adresse est associée à un compte, un nouveau code a été envoyé.')
+      setNotice(passwordDeliveryNotice(result))
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Impossible de renvoyer le code.')
     } finally {
@@ -187,13 +243,13 @@ export function AuthPage({
     setNotice('')
     setLoading(true)
     try {
-      await onForgotPassword(email.trim())
+      const result = await onForgotPassword(email.trim())
       setStep('reset-password')
       setOtp(['', '', '', '', '', ''])
       setPassword('')
       setPasswordConfirmation('')
       setResendSeconds(60)
-      setNotice('Si cette adresse est associée à un compte, un code de réinitialisation a été envoyé.')
+      setNotice(passwordDeliveryNotice(result))
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : 'Impossible de traiter la demande.')
     } finally {
@@ -275,14 +331,14 @@ export function AuthPage({
             <form onSubmit={(event) => void submitCredentials(event)}>
               {isSignup && <label>Nom complet<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Votre nom" autoComplete="name" /></label>}
               <label>Email professionnel<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="vous@entreprise.com" autoComplete="email" /></label>
-              <label>Mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••••" autoComplete={isSignup ? 'new-password' : 'current-password'} /></label>
+              <PasswordField label="Mot de passe" value={password} onChange={setPassword} placeholder="••••••••••" autoComplete={isSignup ? 'new-password' : 'current-password'} />
               {isSignup && password && (
                 <div className={`password-strength strength-${strength.score}`}>
                   <span className="password-strength-track"><span /></span>
                   <small>Force du mot de passe : {strength.label}</small>
                 </div>
               )}
-              {isSignup && <label>Confirmer le mot de passe<input type="password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="••••••••••" autoComplete="new-password" /></label>}
+              {isSignup && <PasswordField label="Confirmer le mot de passe" value={passwordConfirmation} onChange={setPasswordConfirmation} placeholder="••••••••••" autoComplete="new-password" />}
               {error && <div className="error-banner auth-error">{error}</div>}
               {notice && <p className="auth-notice">{notice}</p>}
               {!isSignup && <button className="auth-text-link forgot-link" type="button" onClick={() => { setError(''); setNotice(''); setStep('forgot-password') }}>Mot de passe oublié ?</button>}
@@ -348,9 +404,9 @@ export function AuthPage({
                   />
                 ))}
               </div>
-              <label>Nouveau mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" /></label>
+              <PasswordField label="Nouveau mot de passe" value={password} onChange={setPassword} autoComplete="new-password" />
               {password && <p className="password-hint">Force du mot de passe : {strength.label}</p>}
-              <label>Confirmer le mot de passe<input type="password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} autoComplete="new-password" /></label>
+              <PasswordField label="Confirmer le mot de passe" value={passwordConfirmation} onChange={setPasswordConfirmation} autoComplete="new-password" />
               {error && <div className="error-banner auth-error">{error}</div>}
               {notice && <p className="auth-notice">{notice}</p>}
               <p className="resend-code-row">{resendSeconds > 0 ? `Vous pourrez renvoyer le code dans ${resendSeconds} s` : 'Vous n’avez pas reçu le code ?'} <button className="auth-text-link" type="button" disabled={resendSeconds > 0 || loading} onClick={() => void resend()}>Renvoyer le code</button></p>

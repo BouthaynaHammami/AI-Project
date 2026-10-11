@@ -4,29 +4,32 @@ FastAPI API for the AI Data Analyst application.
 
 ## Requirements
 
-- Python 3.11
-- PostgreSQL for production, or SQLite for local development
+- Python 3.11+
+- PostgreSQL for production (SQLite can be used for local development)
 
 ## Local setup (Windows PowerShell)
 
 From the repository root:
 
 ```powershell
-cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+cd backend
+py -3 -m venv venv
+.\venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Set `ENV=dev` and `DATABASE_URL=sqlite:///./database.db` in `backend\.env`.
-With no `JWT_SECRET_KEY`, development generates an ephemeral key; sessions expire
-when the backend restarts. Production must use a random key of at least 32
-characters and must not use `ENV=dev`.
+Set `ENV=dev` and a valid `DATABASE_URL` in `backend\.env`. For local development,
+the application generates an ephemeral JWT key if `JWT_SECRET_KEY` is empty;
+users will need to sign in again after a backend restart. Set a stable,
+random `JWT_SECRET_KEY` of at least 32 characters to keep local sessions across
+restarts. Never use `ENV=dev` in production.
 
 ## Email delivery
 
-For local testing, run Mailpit and configure its SMTP endpoint:
+The backend `.env` file must have SMTP settings for verification and password
+reset messages to be delivered. For local email testing, run Mailpit, then set
+these values in `backend\.env`:
 
 ```env
 SMTP_HOST=localhost
@@ -35,47 +38,46 @@ SMTP_TLS=false
 SMTP_FROM=AI Data Analyst <no-reply@localhost>
 ```
 
-Open the Mailpit inbox at `http://localhost:8025`. For Mailtrap, use the SMTP
-host, username, password, and sender supplied by its inbox, normally port 587
-with `SMTP_TLS=true`. If SMTP is not configured, verification codes are written
-to application logs only when `ENV=dev`.
+Open the Mailpit inbox at `http://localhost:8025`. If you do not run Mailpit,
+clear `SMTP_HOST` and `SMTP_FROM` in `backend\.env`; verification codes are
+then written to the backend terminal only when `ENV=dev`;
+the frontend indicates this development mode instead of claiming that an email
+was delivered. If SMTP is configured but delivery fails, the API reports the
+failure and the user can request another code.
+
+For a real inbox, use an SMTP provider's host, port, sender address, username,
+password, and TLS requirements in `backend\.env`. Do not use `no-reply@localhost`
+outside local Mailpit testing.
 
 ## Run the backend
 
 ```powershell
-cd "D:\Esprit\5 SAE\IA\AI-Project\backend"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+cd backend
+.\venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 API documentation: `http://localhost:8000/docs`.
 
-## Authentication endpoints
+## Conversation history
 
-- `POST /auth/signup`
-- `POST /auth/verify-email`
-- `POST /auth/resend-code`
-- `POST /auth/login`
-- `POST /auth/forgot-password`
-- `POST /auth/reset-password`
-- `GET` / `PUT /auth/me`
-- `POST /auth/logout`
+Authenticated conversation routes are available at `/conversations`:
 
-Codes expire after 10 minutes, allow five attempts, and are stored as HMAC
-digests. Rate limits return HTTP 429 with `Retry-After`. Existing accounts
-created before email verification can be marked verified after reviewing the
-migration with:
+- `POST /conversations` creates a new chat, optionally with owned dataset IDs.
+- `GET /conversations` lists the signed-in user's chats.
+- `GET /conversations/{id}` returns the full ordered message history.
+- `POST /conversations/{id}/messages` analyzes a question in that chat and saves
+  both the question and its answer/result.
+- `PATCH /conversations/{id}` updates its title, favorite state, or dataset list.
+- `DELETE /conversations/{id}` deletes the chat and its associated analyses.
 
-```sql
-UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;
-```
-
-The application creates the `email_codes` and `revoked_tokens` tables and adds
-the authentication columns to existing user tables during startup.
+The analysis context is loaded only from earlier analyses in the same
+conversation. A chat title is set from its first question and can then be
+renamed from the sidebar.
 
 ## Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests -q
+.\venv\Scripts\python.exe -m pytest tests -q
 ```
 
 ## Upload formats
@@ -83,11 +85,4 @@ the authentication columns to existing user tables during startup.
 The upload API extracts CSV, XLS/XLSX, PDF, DOC/DOCX, PNG, and JPEG files.
 Image and scanned-PDF OCR also require Tesseract OCR with French and English
 language data on `PATH`. Reading legacy `.doc` files requires LibreOffice,
-antiword, or catdoc; `.docx` files do not require an external converter.
-
-## Security notes
-
-The frontend currently stores bearer tokens in `localStorage`. Any successful
-cross-site scripting vulnerability can expose these tokens; use strict output
-escaping and a restrictive Content Security Policy, and consider migrating to
-httpOnly cookies with CSRF protection for a higher-assurance deployment.
+antiword, or catdoc; `.docx` files do not need an external converter.
