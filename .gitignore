@@ -1,13 +1,28 @@
-.env/
+# Environment variables and secrets
 .env
+.env/
+.env.*
+!.env.example
 backend/.env
+
+# Python virtual environment
+backend/.venv/
+.venv/
+
+# Python cache and testing
+__pycache__/
+*.py[cod]
+.pytest_cache/
 backend/.pytest_cache/
+
+# Local database
 backend/database.db
+
+# Backend runtime files
 backend/uvicorn
 backend/uploads/*
-.pytest_cache/
-__pycache__/
-*.pyc
+
+# Frontend
 .vite/
 frontend/node_modules/
 frontend/dist/

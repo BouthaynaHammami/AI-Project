@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
+from jose import jwt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -14,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import auth as auth_api
 from app.core.database import Base, get_db
 from app.core.rate_limit import limiter
-from app.core.security import get_password_hash
+from app.core.security import ALGORITHM, SECRET_KEY, get_password_hash
 from app.main import app
 from app.models.analysis import Analysis
 from app.models.conversation import Conversation
@@ -542,3 +543,111 @@ def test_signup_updates_existing_unverified_account_after_cooldown():
         "/auth/login",
         json={"email": "person@example.com", "password": "DifferentPass456"},
     ).status_code == 403
+
+
+def test_signup_rejects_duplicate_verified_account_and_invalid_input():
+    create_verified_account()
+
+    duplicate = signup()
+    invalid_email = client.post(
+        "/auth/signup",
+        json={"name": "Test User", "email": "not-an-email", "password": "StrongPass123"},
+    )
+    long_password = client.post(
+        "/auth/signup",
+        json={
+            "name": "Test User",
+            "email": "long@example.com",
+            "password": "A" * 72 + "1é",
+        },
+    )
+
+    assert duplicate.status_code == 409
+    assert invalid_email.status_code == 422
+    assert long_password.status_code == 422
+
+
+def test_verification_code_is_single_use_and_resend_replaces_old_code():
+    signup()
+    first_code = sent_codes[-1][1]
+
+    with TestSession() as db:
+        record = db.query(EmailCode).one()
+        record.created_at = datetime.now(timezone.utc) - timedelta(seconds=61)
+        db.commit()
+
+    assert client.post(
+        "/auth/resend-code",
+        json={"email": "person@example.com"},
+    ).status_code == 202
+    second_code = sent_codes[-1][1]
+    assert second_code != first_code
+
+    old_code = client.post(
+        "/auth/verify-email",
+        json={"email": "person@example.com", "code": first_code},
+    )
+    new_code = client.post(
+        "/auth/verify-email",
+        json={"email": "person@example.com", "code": second_code},
+    )
+    reused_code = client.post(
+        "/auth/verify-email",
+        json={"email": "person@example.com", "code": second_code},
+    )
+
+    assert old_code.status_code == 400
+    assert new_code.status_code == 200
+    assert reused_code.status_code == 400
+
+
+def test_authentication_rejects_missing_malformed_and_expired_tokens():
+    expired_token = jwt.encode(
+        {
+            "sub": "1",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+            "iat": datetime.now(timezone.utc) - timedelta(minutes=2),
+            "jti": "expired-test-token",
+            "type": "access",
+            "ver": 0,
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+    assert client.get("/auth/me").status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": "Bearer malformed"}).status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": "Basic credentials"}).status_code == 401
+    assert client.get("/auth/me", headers={"Authorization": f"Bearer {expired_token}"}).status_code == 401
+
+
+def test_profile_update_changes_name_and_photo_without_exposing_password():
+    token = create_verified_account()
+    response = client.put(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Updated User", "profile_photo": "data:image/png;base64,test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Updated User"
+    assert response.json()["profile_photo"] == "data:image/png;base64,test"
+    assert "password" not in response.json()
+    assert "password_hash" not in response.json()
+
+
+def test_verified_user_cannot_access_another_users_profile():
+    first_token = create_verified_account("first@example.com")
+    create_verified_account("second@example.com")
+
+    with TestSession() as db:
+        second_user = db.query(User).filter_by(email="second@example.com").one()
+        second_user_id = second_user.id
+
+    response = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] != second_user_id

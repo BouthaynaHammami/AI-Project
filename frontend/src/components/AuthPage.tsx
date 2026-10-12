@@ -208,7 +208,7 @@ export function AuthPage({
       setOtp(next)
       const target = Math.min(pasted.length, 5)
       otpRefs.current[target]?.focus()
-      if (pasted.length === 6) void verifyCode(pasted.join(''))
+      if (pasted.length === 6 && step === 'verify-email') void verifyCode(pasted.join(''))
       return
     }
 

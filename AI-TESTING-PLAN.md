@@ -1,0 +1,166 @@
+# AI Data Analyst - AI Testing Plan
+
+## Testing strategy
+
+The project is divided into five modules. Three testing tools are used:
+
+- **pytest + HTTPX** for FastAPI API and service tests.
+- **Vitest + React Testing Library** for React component and service tests.
+- **Playwright** for complete browser-to-API end-to-end tests.
+
+Never use real credentials, API keys, email servers, or production data in tests. Use isolated test databases, deterministic fixtures, and mocked external AI/email services.
+
+---
+
+## Module 1 - Authentication and accounts
+
+**Functionality:** User signup, email verification, login, JWT authorization, logout, password reset, profile updates, and account deletion.
+
+**Test:** Valid and invalid credentials, duplicate accounts, weak passwords, expired/reused codes, token expiration and revocation, protected routes, user isolation, rate limits, and sensitive-data exposure.
+
+**Tool and configuration:** `pytest + HTTPX`. Reuse the backend fixtures, override the database dependency with an isolated test database, and mock email delivery. Run:
+
+```powershell
+cd backend
+python -m pytest tests -q
+```
+
+**Copilot prompt:**
+
+```text
+Act as a senior FastAPI security QA engineer. Test Module 1 of this AI Data Analyst project using pytest and HTTPX. Inspect the existing fixtures and tests first, then add tests under backend/tests without changing production behavior.
+
+Cover signup, duplicate email rejection, email validation, password-strength and bcrypt-length validation, password hashing, email verification with valid/invalid/expired/reused codes, resend-code behavior, login failures and success, JWT expiration and revocation, /auth/me authorization, logout, forgot-password and reset-password flows, profile updates, account deletion, rate limiting, and authorization isolation between two users.
+
+Use an isolated test database and mock all email delivery. Never read backend/.env, use real credentials, call real email/AI services, or expose tokens, hashes, codes, or secrets. Assert status codes, response bodies, database state, and security boundaries. Run the focused tests and report the command, test count, failures, and uncovered behavior.
+```
+
+---
+
+## Module 2 - File ingestion, profiling, and privacy
+
+**Functionality:** Upload and parse CSV, XLS/XLSX, PDF, DOC/DOCX, PNG, and JPEG files; preview data; profile columns; detect PII; apply exclude/mask/allow preferences; list and delete datasets.
+
+**Test:** Supported and unsupported formats, empty files, malformed files, multiple uploads, extraction accuracy, previews, row/column counts, missing values, duplicates, dates, statistics, PII detection and masking, ownership, rollback, and safe file deletion.
+
+**Tool and configuration:** `pytest`. Use temporary files and in-memory uploads. Mock OCR, optional converters, and external services. Run:
+
+```powershell
+cd backend
+python -m pytest tests -q
+```
+
+**Copilot prompt:**
+
+```text
+Act as a senior data-processing QA engineer. Test Module 2 of this FastAPI AI Data Analyst project with pytest. Inspect existing tests and fixtures before adding focused tests under backend/tests.
+
+Test valid CSV, XLS, XLSX, PDF, DOCX, PNG, and JPEG uploads where dependencies are available; reject unsupported, empty, missing-name, and malformed files. Verify row counts, column counts, previews, JSON-safe pandas/NumPy values, document page counts, and transaction rollback.
+
+Test profiling for numeric, text, categorical, boolean, and date columns, including missing values, percentages, duplicates, statistics, date ranges, and quality alerts. Test PII detection and exclude/mask/allow preferences, proving sensitive values are not passed to AI input. Test dataset ownership, unauthorized preview/deletion, cascade rules, upload-directory path validation, and physical file cleanup.
+
+Use temporary files, deterministic data, an isolated database, and mocks for OCR/converters. Never read backend/.env or use real user data. Preserve production behavior. Run the focused and full backend suites and report test count, skipped environment-dependent tests, and defects.
+```
+
+---
+
+## Module 3 - AI analysis and conversations
+
+**Functionality:** Ask questions about one or more datasets, generate AI answers and charts, execute generated analysis code, suggest questions, maintain conversations, enforce quotas, and save analysis history.
+
+**Test:** Dataset ownership, valid and invalid questions, AI prompts and context, provider failures, generated-code safety, retry behavior, result/chart parsing, suggestions, conversation history, quota handling, persistence, and rollback.
+
+**Tool and configuration:** `pytest`. Mock the Groq/LLM client and use deterministic pandas DataFrames. Run:
+
+```powershell
+cd backend
+python -m pytest tests -q
+```
+
+**Copilot prompt:**
+
+```text
+Act as a senior AI-platform QA engineer. Test Module 3 of this FastAPI AI Data Analyst project using pytest. Read the existing AI, analysis, suggestion, and conversation tests first and extend their fixtures and conventions.
+
+Test analysis requests with one and multiple owned datasets, invalid or empty questions, deleted or foreign datasets, quota limits, usage events, and database rollback. Mock the external Groq/LLM provider and verify dataset context, bounded conversation history, PII filtering, malformed responses, and provider failures.
+
+Treat generated Python as untrusted input. Test valid pandas analysis, scalar/table/text/chart results, syntax and runtime retry paths, unsafe imports, filesystem/network/subprocess access, unsafe builtins, infinite-loop limits, JSON serialization, and result-size limits. Test chart validation and suggestion generation, sanitization, categories, duplicates, caching, and provider failures.
+
+Test conversation creation, ownership validation, listing, search, favorites, ordered messages, legacy analysis history, adding messages, renaming, dataset updates, deletion, and cross-user access. Never call a real AI API, read backend/.env, or use secrets. Assert API schemas, database invariants, quota behavior, and failure cleanup. Run focused tests then all backend tests and report results.
+```
+
+---
+
+## Module 4 - React interface
+
+**Functionality:** Authentication screens, file selection, analysis dashboard, charts, data preview, chat, history/search/favorites, settings, and admin usage screens.
+
+**Test:** User-visible validation, loading/error states, callbacks, rendering, keyboard interactions, accessibility, service requests, token persistence, and null/empty API data.
+
+**Tool and configuration:** `Vitest + React Testing Library`. Mock API/service modules and do not call the backend. The frontend already defines the test script in `frontend/package.json`. Run:
+
+```powershell
+cd frontend
+npm run test
+npm run build
+```
+
+**Copilot prompt:**
+
+```text
+Act as a senior React QA engineer. Test Module 4 of this Vite React AI Data Analyst project with Vitest and React Testing Library. Inspect the existing frontend test and configuration first, then add focused tests without changing behavior merely to satisfy tests.
+
+Cover login/signup validation, password visibility, verification-code entry and paste, resend cooldown, password reset, loading states, and API errors. Test CSV/XLSX selection, unsupported-file errors, disabled submit state, selected filename, upload callback, and upload failures.
+
+Test the analysis dashboard metrics, dataset names, chart rendering, malformed chart JSON, numeric fallback chart, document suggestions, chat messages, empty states, and analyzing state. Test history loading, debounced search, favorites, rename with Enter, cancel with Escape, deletion/undo, selection, retry errors, settings updates, logout, account deletion, and admin-only content.
+
+Mock API/service calls and assert HTTP method, URL, query, payload, FormData, token persistence, and error propagation. Prefer roles, labels, accessible names, and user-visible behavior. Test keyboard access and null/empty API responses. Run npm run test and npm run build; report test count, failures, and accessibility defects.
+```
+
+---
+
+## Module 5 - Analysis lifecycle, export, and sharing
+
+**Functionality:** Analysis history lifecycle, rename/favorite, feedback, soft delete/restore, XLSX/PDF export, share-link creation/revocation/expiration, and public shared analysis pages.
+
+**Test:** Complete authenticated and public user journeys, downloads, permissions, expired/revoked links, response headers, visible errors, and refresh/direct-navigation behavior.
+
+**Tool and configuration:** `Playwright`. Run the backend and frontend with the commands documented in the repository README, then execute the Playwright suite headlessly. Use isolated test accounts and seed data; capture downloads and traces on failure.
+
+**Copilot prompt:**
+
+```text
+Act as a senior end-to-end QA engineer. Test Module 5 of this AI Data Analyst project with Playwright against the running FastAPI backend and React frontend. Inspect routes and existing conventions first.
+
+Create isolated tests for authenticated history search, favorites, rename, opening an analysis, delete/restore, positive and negative feedback, feedback updates/deletion, XLSX and PDF downloads, safe filenames, invalid formats, and unauthorized access.
+
+Test share-link creation for every supported expiration period, public viewing without authentication, displayed question/answer/chart/date, view counts, single-link and all-link revocation, expired links, deleted-analysis invalidation, noindex/no-store response headers, direct public URL navigation, refresh, loading states, and visible API errors.
+
+Do not mock the application API for end-to-end journeys; mock only external services such as the AI provider or email provider. Use isolated accounts and deterministic seed data. Prefer accessible selectors, capture downloads with Playwright, and save traces/screenshots only for failures. Run headlessly and report setup commands, browser version, test count, failures, and defects.
+
+### Module 5 execution
+
+From `frontend`, install the browser once and run the suite with an isolated, pre-seeded analysis:
+
+```powershell
+npm install
+npx playwright install chromium
+$env:E2E_USER_EMAIL = "..."
+$env:E2E_USER_PASSWORD = "..."
+$env:E2E_ANALYSIS_ID = "..."
+$env:E2E_SHARE_TOKEN = "..."
+npm run test:e2e
+```
+
+Optional endpoints are configured with `E2E_API_URL` and `E2E_FRONTEND_URL`. The suite does not mock application API calls; when the fixture variables are absent, tests are reported as skipped rather than contacting a real account.
+```
+
+---
+
+## Suggested execution order
+
+1. Module 1 - Authentication and accounts.
+2. Module 2 - File ingestion, profiling, and privacy.
+3. Module 3 - AI analysis and conversations.
+4. Module 4 - React interface.
+5. Module 5 - Analysis lifecycle, export, and sharing.

@@ -148,6 +148,7 @@ async def upload_datasets(
         raise HTTPException(status_code=400, detail="At least one file is required.")
 
     uploaded_datasets = []
+    saved_file_paths: list[Path] = []
 
     try:
         for file in files:
@@ -162,6 +163,7 @@ async def upload_datasets(
                 file_path, dataframe = save_and_read_file(file.filename, content)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=f"{file.filename}: {error}") from error
+            saved_file_paths.append(file_path)
 
             dataset = Dataset(
                 user_id=current_user.id,
@@ -199,9 +201,19 @@ async def upload_datasets(
 
     except HTTPException:
         db.rollback()
+        for file_path in saved_file_paths:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Uploaded file cleanup failed: path=%s", file_path)
         raise
     except Exception as error:
         db.rollback()
+        for file_path in saved_file_paths:
+            try:
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Uploaded file cleanup failed: path=%s", file_path)
         logger.error("Dataset upload failed: uploaded_count=%s", len(uploaded_datasets))
         raise HTTPException(status_code=500, detail="Could not upload the selected files.") from error
     finally:

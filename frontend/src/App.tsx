@@ -5,6 +5,7 @@ import { AnalysisBar } from './components/AnalysisBar'
 import { AnalysisPage } from './components/AnalysisPage'
 import { SettingsPage } from './components/SettingsPage'
 import { Sidebar } from './components/Sidebar'
+import { PublicSharedAnalysis } from './components/PublicSharedAnalysis'
 import { useDemoData } from './hooks/useDemoData'
 import { getApiError } from './services/api'
 import { getProfile, login, logout, requestPasswordReset, resendVerificationCode, resetPassword, signup, verifyEmail } from './services/authService'
@@ -113,7 +114,7 @@ function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: s
   )
 }
 
-export default function App() {
+function AppShell() {
   const [isLoggedIn, setIsLoggedIn] = useState(Boolean(localStorage.getItem('access_token')))
   const [userName, setUserName] = useState('Utilisateur')
   const [profilePhoto, setProfilePhoto] = useState(localStorage.getItem('user_photo') || '')
@@ -127,6 +128,7 @@ export default function App() {
       setSettingsPage(false)
       setProfilePhoto('')
     }
+
     window.addEventListener('auth:expired', onExpired)
     if (localStorage.getItem('access_token')) {
       getProfile()
@@ -188,6 +190,7 @@ export default function App() {
       />
     )
   }
+
   if (isLoggedIn) {
     return <Analyst userName={userName} profilePhoto={profilePhoto} onSettings={() => setSettingsPage(true)} onLogout={signOut} />
   }
@@ -228,4 +231,10 @@ export default function App() {
       )}
     </>
   )
+}
+
+export default function App() {
+  const shareToken = window.location.pathname.match(/^\/share\/([^/]+)$/)?.[1]
+  if (shareToken) return <PublicSharedAnalysis token={decodeURIComponent(shareToken)} />
+  return <AppShell />
 }

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from app.services import ai_service
 
@@ -64,6 +65,49 @@ def test_execute_code_captures_json_safe_result_table_up_to_one_thousand_rows():
     assert serialized["columns"] == ["value", "optional"]
     assert len(serialized["rows"]) == 1000
     assert serialized["rows"][0] == [0, None]
+
+
+def test_execute_code_supports_scalar_text_and_chart_results():
+    dataframe = pd.DataFrame({"region": ["Nord", "Sud"], "sales": [10, 20]})
+
+    output, chart_data, result_table = ai_service._execute_code(
+        "total = df['sales'].sum()\nprint(total)\n"
+        "chart_data = {'type': 'bar', 'title': 'Ventes', 'labels': ['Nord', 'Sud'], "
+        "'series': [{'name': 'Ventes', 'values': [10, 20]}]}",
+        dataframe,
+    )
+
+    assert output == "30"
+    assert chart_data["labels"] == ["Nord", "Sud"]
+    assert result_table is None
+
+
+def test_execute_code_rejects_unsafe_imports_calls_attributes_and_loops():
+    dataframe = pd.DataFrame({"value": [1]})
+    unsafe_snippets = [
+        "import os",
+        "__import__('os')",
+        "open('secret.txt')",
+        "df.to_csv('secret.csv')",
+        "df.__class__",
+        "df._mgr",
+        "df.plot.savefig('secret.png')",
+        "__builtins__['open']('secret.txt')",
+        "while True:\n    pass",
+        "for value in range(10):\n    print(value)",
+    ]
+
+    for snippet in unsafe_snippets:
+        try:
+            ai_service._execute_code(snippet, dataframe)
+        except ValueError:
+            continue
+        raise AssertionError(f"Unsafe generated code was accepted: {snippet}")
+
+
+def test_execute_code_does_not_expose_general_builtins():
+    with pytest.raises(ValueError):
+        ai_service._execute_code("print(__name__)", pd.DataFrame({"value": [1]}))
 
 
 def test_chart_validator_accepts_multiple_series_and_limits_points():

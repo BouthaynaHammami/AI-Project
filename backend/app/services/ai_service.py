@@ -11,6 +11,7 @@ Cette colonne indique le fichier d'origine de chaque ligne.
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import logging
@@ -30,6 +31,133 @@ logger = logging.getLogger(__name__)
 
 _MODEL = "qwen/qwen3.8-27b"
 _MAX_PREVIEW_ROWS = 10
+_SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+}
+_BLOCKED_CALLS = {
+    "__import__",
+    "breakpoint",
+    "compile",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "help",
+    "input",
+    "locals",
+    "open",
+    "setattr",
+    "vars",
+}
+_BLOCKED_ATTRIBUTES = {
+    "read_clipboard",
+    "read_csv",
+    "read_excel",
+    "read_json",
+    "read_pickle",
+    "read_sql",
+    "plot",
+    "savefig",
+    "system",
+    "popen",
+    "run",
+    "Popen",
+    "socket",
+    "urlopen",
+    "to_csv",
+    "to_excel",
+    "to_json",
+    "to_pickle",
+    "to_sql",
+}
+_SAFE_MODULE_ATTRIBUTES = {
+    "json": {"dumps", "loads"},
+    "pd": {
+        "DataFrame",
+        "Series",
+        "Timestamp",
+        "Timedelta",
+        "Grouper",
+        "concat",
+        "crosstab",
+        "cut",
+        "isna",
+        "notna",
+        "qcut",
+        "to_datetime",
+        "to_numeric",
+    },
+}
+
+
+class _GeneratedCodeValidator(ast.NodeVisitor):
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id.startswith("__"):
+            raise ValueError(f"Generated code cannot access name {node.id!r}.")
+        self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        raise ValueError("Generated code cannot import modules.")
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        raise ValueError("Generated code cannot import modules.")
+
+    def visit_While(self, node: ast.While) -> None:
+        raise ValueError("Generated code cannot use unbounded loops.")
+
+    def visit_For(self, node: ast.For) -> None:
+        raise ValueError("Generated code cannot use unbounded loops.")
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        raise ValueError("Generated code cannot use unbounded loops.")
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        raise ValueError("Generated code cannot define asynchronous functions.")
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr.startswith("_") or node.attr in _BLOCKED_ATTRIBUTES:
+            raise ValueError(f"Generated code cannot access attribute {node.attr!r}.")
+        if isinstance(node.value, ast.Name):
+            allowed = _SAFE_MODULE_ATTRIBUTES.get(node.value.id)
+            if allowed is not None and node.attr not in allowed:
+                raise ValueError(
+                    f"Generated code cannot access {node.value.id}.{node.attr}."
+                )
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id in _BLOCKED_CALLS:
+            raise ValueError(f"Generated code cannot call {node.func.id!r}.")
+        self.generic_visit(node)
+
+
+def _validate_generated_code(code: str) -> ast.AST:
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as error:
+        raise ValueError("Generated code contains invalid Python syntax.") from error
+    _GeneratedCodeValidator().visit(tree)
+    return tree
 
 
 def _create_completion(client: Groq, usage_totals: dict[str, int], **kwargs: Any):
@@ -133,16 +261,18 @@ def _execute_code(
         json
     """
 
+    tree = _validate_generated_code(code)
     namespace: dict[str, Any] = {
         "df": df,
         "pd": pd,
         "json": json,
+        "__builtins__": _SAFE_BUILTINS,
     }
 
     buffer = io.StringIO()
 
     with redirect_stdout(buffer):
-        exec(code, namespace)  # noqa: S102
+        exec(compile(tree, "<generated-analysis>", "exec"), namespace)  # noqa: S102
 
     output = buffer.getvalue().strip()
 
