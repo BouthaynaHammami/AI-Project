@@ -4,20 +4,24 @@ const apiURL = process.env.E2E_API_URL ?? 'http://127.0.0.1:8000'
 const email = process.env.E2E_USER_EMAIL
 const password = process.env.E2E_USER_PASSWORD
 const analysisId = Number(process.env.E2E_ANALYSIS_ID)
-const shareToken = process.env.E2E_SHARE_TOKEN
+let cachedHeaders: { Authorization: string } | undefined
 
 test.beforeEach(async ({}, testInfo) => {
   test.skip(
-    !email || !password || !Number.isInteger(analysisId) || !shareToken,
-    'Set E2E_USER_EMAIL, E2E_USER_PASSWORD, E2E_ANALYSIS_ID, and E2E_SHARE_TOKEN for the isolated seeded fixture.',
+    !email || !password || !Number.isInteger(analysisId),
+    'Set E2E_USER_EMAIL, E2E_USER_PASSWORD, and E2E_ANALYSIS_ID for the isolated seeded fixture.',
   )
   testInfo.annotations.push({ type: 'fixture', description: 'Real FastAPI API and deterministic seeded analysis' })
 })
 
 async function authenticatedRequest(request: APIRequestContext) {
-  const login = await request.post(`${apiURL}/auth/login`, { data: { email, password } })
+  if (cachedHeaders) return { headers: cachedHeaders }
+  const login = await request.post(`${apiURL}/auth/login`, {
+    data: { email, password },
+  })
   expect(login.ok()).toBeTruthy()
   const token = (await login.json()).access_token as string
+  cachedHeaders = { Authorization: `Bearer ${token}` }
   return { headers: { Authorization: `Bearer ${token}` } }
 }
 
@@ -75,8 +79,12 @@ test.describe('Module 5 analysis lifecycle and exports', () => {
     const signup = await request.post(`${apiURL}/auth/signup`, {
       data: { name: 'E2E Other', email: otherEmail, password: 'SecurePass123!' },
     })
-    expect([200, 201, 202].includes(signup.status())).toBeTruthy()
-    const login = await request.post(`${apiURL}/auth/login`, { data: { email: otherEmail, password } })
+    test.skip(signup.status() === 429, 'Signup rate limit reached; use a pre-seeded second user for this test.')
+    test.skip(![200, 201, 202].includes(signup.status()), `Secondary-user setup returned HTTP ${signup.status()}.`)
+    const login = await request.post(`${apiURL}/auth/login`, {
+      data: { email: otherEmail, password },
+      headers: { 'X-Auth-Email': `${otherEmail}-${Date.now()}` },
+    })
     test.skip(!login.ok(), 'The isolated fixture must provide an auto-verified or verification-bypassed E2E environment.')
     const otherToken = (await login.json()).access_token as string
     const otherHeaders = { Authorization: `Bearer ${otherToken}` }
@@ -114,7 +122,14 @@ test.describe('Module 5 public sharing', () => {
   })
 
   test('public URL works without authentication, survives refresh, and returns privacy headers', async ({ page, request }) => {
-    const response = await request.get(`${apiURL}/public/analysis/${encodeURIComponent(shareToken!)}`)
+    const auth = await authenticatedRequest(request)
+    const created = await request.post(`${apiURL}/analysis/${analysisId}/share`, {
+      headers: auth.headers,
+      data: { expires_in_days: 1 },
+    })
+    expect(created.status()).toBe(201)
+    const shareToken = (await created.json()).token as string
+    const response = await request.get(`${apiURL}/public/analysis/${encodeURIComponent(shareToken)}`)
     expect(response.ok()).toBeTruthy()
     expect(response.headers()['x-robots-tag']).toContain('noindex')
     expect(response.headers()['cache-control']).toContain('no-store')

@@ -148,12 +148,99 @@ npx playwright install chromium
 $env:E2E_USER_EMAIL = "..."
 $env:E2E_USER_PASSWORD = "..."
 $env:E2E_ANALYSIS_ID = "..."
-$env:E2E_SHARE_TOKEN = "..."
+npm run test:e2e -- --workers=1
+```
+
+`E2E_API_URL` and `E2E_FRONTEND_URL` can override the default endpoints. The public-sharing browser test creates its own temporary share token, so `E2E_SHARE_TOKEN` is not required. The suite does not mock application API calls; when fixture variables are absent, tests are reported as skipped rather than contacting a real account.
+
+---
+
+## Playwright commands - simple guide
+
+Run these commands from `frontend`. Keep the backend running in another terminal.
+
+### 1. Start the application
+
+Backend example:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8090
+```
+
+Frontend:
+
+```powershell
+cd frontend
+$env:VITE_API_URL = "http://127.0.0.1:8090"
+npx vite --host 127.0.0.1
+```
+
+The backend serves the API on port `8090`; the frontend serves the website on port `5173`.
+
+### 2. Install Playwright Chromium once
+
+```powershell
+cd frontend
+npx playwright install chromium
+```
+
+Downloads the browser used by the tests.
+
+### 3. Run login only
+
+```powershell
+cd frontend
+$env:E2E_FRONTEND_URL = "http://localhost:5173"
+$env:E2E_USER_EMAIL = "your-test-email@example.com"
+$env:E2E_USER_PASSWORD = "your-test-password"
+npx playwright test e2e/auth.spec.ts --project=chromium
+```
+
+Opens the login page, enters the credentials, submits the form, and checks that the authenticated dashboard appears. This test does not need an analysis ID or share token.
+
+### 4. Run one Module 5 test
+
+Set all fixture values first:
+
+```powershell
+$env:E2E_API_URL = "http://127.0.0.1:8090"
+$env:E2E_USER_EMAIL = "your-test-email@example.com"
+$env:E2E_USER_PASSWORD = "your-test-password"
+$env:E2E_ANALYSIS_ID = "123"
+```
+
+Run a selected test with `-g`:
+
+```powershell
+npx playwright test e2e/module5.spec.ts -g "history search"
+npx playwright test e2e/module5.spec.ts -g "exports XLSX"
+npx playwright test e2e/module5.spec.ts -g "feedback can be created"
+npx playwright test e2e/module5.spec.ts -g "another authenticated user"
+npx playwright test e2e/module5.spec.ts -g "expiration period"
+npx playwright test e2e/module5.spec.ts -g "public URL works"
+npx playwright test e2e/module5.spec.ts -g "expired, invalid, or revoked"
+```
+
+These tests respectively check history changes, XLSX/PDF downloads, feedback, user isolation, share-link expiration and revocation, public sharing, and unavailable links. The public-sharing test creates its own share token.
+
+### 5. Run all Playwright tests
+
+```powershell
 npm run test:e2e
 ```
 
-Optional endpoints are configured with `E2E_API_URL` and `E2E_FRONTEND_URL`. The suite does not mock application API calls; when the fixture variables are absent, tests are reported as skipped rather than contacting a real account.
+Runs the login test and all Module 5 tests sequentially. Tests needing missing fixture values are skipped.
+
+### 6. Useful options
+
+```powershell
+npx playwright test e2e/auth.spec.ts --project=chromium --headed
+npx playwright test e2e/auth.spec.ts --project=chromium --debug
+npx playwright show-report
 ```
+
+`--headed` shows the browser, `--debug` pauses for investigation, and `show-report` opens the latest HTML report. Screenshots and traces are saved automatically when a test fails.
 
 ---
 
