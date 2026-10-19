@@ -125,7 +125,7 @@ Mock API/service calls and assert HTTP method, URL, query, payload, FormData, to
 
 **Test:** Complete authenticated and public user journeys, downloads, permissions, expired/revoked links, response headers, visible errors, and refresh/direct-navigation behavior.
 
-**Tool and configuration:** `Playwright`. Run the backend and frontend with the commands documented in the repository README, then execute the Playwright suite headlessly. Use isolated test accounts and seed data; capture downloads and traces on failure.
+**Tool and configuration:** `Playwright`. The Playwright configuration starts the frontend and a dedicated backend backed by a temporary SQLite database, then seeds synthetic test accounts, an analysis, and a public share link. The temporary database is removed when the test server exits.
 
 **Copilot prompt:**
 
@@ -140,11 +140,11 @@ Do not mock the application API for end-to-end journeys; mock only external serv
 
 ### Module 5 execution
 
-From `frontend`, install the browser once and run the suite with an isolated, pre-seeded analysis:
+From `frontend`, install the browser once, then run the suite:
 
 ```powershell
-npm install
 npx playwright install chromium
+<<<<<<< HEAD
 $env:E2E_USER_EMAIL = "..."
 $env:E2E_USER_PASSWORD = "..."
 $env:E2E_ANALYSIS_ID = "..."
@@ -238,6 +238,12 @@ Runs the login test and all Module 5 tests sequentially. Tests needing missing f
 npx playwright test e2e/auth.spec.ts --project=chromium --headed
 npx playwright test e2e/auth.spec.ts --project=chromium --debug
 npx playwright show-report
+=======
+npm run test:e2e
+```
+
+To open Playwright's interactive runner, use `npm run test:e2e:ui`. The suite uses dedicated local ports `18765` and `18766`; it refuses to reuse an existing service and never connects to the regular backend on port `8000`. It does not mock application API calls. The test database and synthetic data are isolated from application data and removed after the run.
+>>>>>>> 353023a (Fix profile updates and configure isolated E2E tests)
 ```
 
 `--headed` shows the browser, `--debug` pauses for investigation, and `show-report` opens the latest HTML report. Screenshots and traces are saved automatically when a test fails.

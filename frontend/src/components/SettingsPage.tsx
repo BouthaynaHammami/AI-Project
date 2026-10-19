@@ -19,6 +19,8 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
   const photoInput = useRef<HTMLInputElement>(null)
   const [name, setName] = useState(initialName)
   const [email, setEmail] = useState('')
+  const [originalEmail, setOriginalEmail] = useState('')
+  const [currentPassword, setCurrentPassword] = useState('')
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
   const [photo, setPhoto] = useState(profilePhoto)
@@ -36,6 +38,7 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
       .then((profile) => {
         setName(profile.name)
         setEmail(profile.email)
+        setOriginalEmail(profile.email)
         if (profilePhoto) setPhoto(profilePhoto)
       })
       .catch((profileError) => setError(getApiError(profileError)))
@@ -75,17 +78,27 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
       return
     }
 
+    const emailChanged = email.trim().toLowerCase() !== originalEmail.trim().toLowerCase()
+    if ((emailChanged || password) && !currentPassword) {
+      setError('Saisissez votre mot de passe actuel pour modifier votre email ou votre mot de passe.')
+      return
+    }
+
     try {
       const profile = await updateProfile({
         name: name.trim() || initialName,
-        email,
         profile_photo: photo,
+        ...(emailChanged ? { email: email.trim() } : {}),
         ...(password ? { password } : {}),
+        ...(emailChanged || password ? { current_password: currentPassword } : {}),
       })
 
       onSaveName(profile.name)
       onSavePhoto(profile.profile_photo ?? '')
       setName(profile.name)
+      setEmail(profile.email)
+      setOriginalEmail(profile.email)
+      setCurrentPassword('')
       setPassword('')
       setPasswordConfirmation('')
       setSaved(true)
@@ -145,7 +158,7 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
           </section>
           <section className="settings-card">
             <div className="settings-card-heading"><div><span className="section-kicker">SÉCURITÉ</span><h2>Modifier le mot de passe</h2></div><LockKeyhole size={18} /></div>
-            <label>Mot de passe actuel<input type="password" placeholder="••••••••" /></label>
+            <label>Mot de passe actuel<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label>
             <label>Nouveau mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" /></label>
             <label>Confirmer le nouveau mot de passe<input type="password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="••••••••" /></label>
             <p className="password-hint">Utilisez au moins 8 caractères avec un mélange de lettres et de chiffres.</p>

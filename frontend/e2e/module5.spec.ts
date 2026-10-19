@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
+<<<<<<< HEAD
 const apiURL = process.env.E2E_API_URL ?? 'http://127.0.0.1:8000'
 const email = process.env.E2E_USER_EMAIL
 const password = process.env.E2E_USER_PASSWORD
@@ -11,15 +12,30 @@ test.beforeEach(async ({}, testInfo) => {
     !email || !password || !Number.isInteger(analysisId),
     'Set E2E_USER_EMAIL, E2E_USER_PASSWORD, and E2E_ANALYSIS_ID for the isolated seeded fixture.',
   )
+=======
+const apiURL = 'http://127.0.0.1:18765'
+const email = 'e2e-owner@example.com'
+const password = 'E2E-Only-Password-123!'
+const otherEmail = 'e2e-other@example.com'
+const analysisId = 1
+const shareToken = 'e2e-local-share-token'
+
+test.beforeEach(async ({}, testInfo) => {
+>>>>>>> 353023a (Fix profile updates and configure isolated E2E tests)
   testInfo.annotations.push({ type: 'fixture', description: 'Real FastAPI API and deterministic seeded analysis' })
 })
 
 async function authenticatedRequest(request: APIRequestContext) {
+<<<<<<< HEAD
   if (cachedHeaders) return { headers: cachedHeaders }
   const login = await request.post(`${apiURL}/auth/login`, {
     data: { email, password },
   })
   expect(login.ok()).toBeTruthy()
+=======
+  const login = await request.post(`${apiURL}/auth/login`, { data: { email, password } })
+  expect(login.ok(), `Login failed (${login.status()}): ${await login.text()}`).toBeTruthy()
+>>>>>>> 353023a (Fix profile updates and configure isolated E2E tests)
   const token = (await login.json()).access_token as string
   cachedHeaders = { Authorization: `Bearer ${token}` }
   return { headers: { Authorization: `Bearer ${token}` } }
@@ -75,6 +91,7 @@ test.describe('Module 5 analysis lifecycle and exports', () => {
   })
 
   test('another authenticated user cannot read or mutate the analysis', async ({ request }) => {
+<<<<<<< HEAD
     const otherEmail = `e2e-other-${Date.now()}@example.test`
     const signup = await request.post(`${apiURL}/auth/signup`, {
       data: { name: 'E2E Other', email: otherEmail, password: 'SecurePass123!' },
@@ -86,6 +103,10 @@ test.describe('Module 5 analysis lifecycle and exports', () => {
       headers: { 'X-Auth-Email': `${otherEmail}-${Date.now()}` },
     })
     test.skip(!login.ok(), 'The isolated fixture must provide an auto-verified or verification-bypassed E2E environment.')
+=======
+    const login = await request.post(`${apiURL}/auth/login`, { data: { email: otherEmail, password } })
+    expect(login.ok(), `Login failed (${login.status()}): ${await login.text()}`).toBeTruthy()
+>>>>>>> 353023a (Fix profile updates and configure isolated E2E tests)
     const otherToken = (await login.json()).access_token as string
     const otherHeaders = { Authorization: `Bearer ${otherToken}` }
     expect((await request.get(`${apiURL}/analysis/${analysisId}/export?format=pdf`, { headers: otherHeaders })).status()).toBe(404)

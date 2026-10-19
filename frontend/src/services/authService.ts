@@ -10,7 +10,7 @@ export async function signup(payload: SignupPayload) { const { data } = await ap
 export async function login(payload: Credentials) { const { data } = await api.post<TokenResponse>('/auth/login', payload); localStorage.setItem('access_token', data.access_token); return data }
 export async function logout() { try { await api.post('/auth/logout') } finally { localStorage.removeItem('access_token') } }
 export async function getProfile() { const { data } = await api.get<Profile>('/auth/me'); return data }
-export async function updateProfile(payload: { name?: string; email?: string; password?: string; profile_photo?: string | null }) { const { data } = await api.put<Profile>('/auth/me', payload); return data }
+export async function updateProfile(payload: { name?: string; email?: string; password?: string; current_password?: string; profile_photo?: string | null }) { const { data } = await api.put<Profile>('/auth/me', payload); return data }
 export async function deleteAccount(currentPassword: string) {
   const { data } = await api.delete<{ message: string; files_cleanup_pending: number }>('/auth/me', {
     data: { current_password: currentPassword },
