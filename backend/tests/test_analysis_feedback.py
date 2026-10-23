@@ -15,6 +15,7 @@ from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.main import app
 from app.models.analysis import Analysis
+from app.models.conversation import Conversation
 from app.models.dataset import Dataset
 from app.models.feedback import Feedback
 from app.models.user import User
@@ -66,8 +67,16 @@ def _create_user_and_analysis() -> tuple[int, int]:
         )
         db.add(dataset)
         db.flush()
+        conversation = Conversation(
+            user_id=user.id,
+            title="Analyse des ventes",
+            dataset_ids=f"[{dataset.id}]",
+        )
+        db.add(conversation)
+        db.flush()
         analysis = Analysis(
             user_id=user.id,
+            conversation_id=conversation.id,
             dataset_id=dataset.id,
             question="Quel est le total des ventes ?",
             answer="Le total est 42.",
@@ -164,6 +173,10 @@ def test_feedback_can_be_deleted_and_stats_include_recent_negative_questions():
     )
     stats = client.get("/analysis/stats", headers=headers)
     history_before_delete = client.get("/analysis/history", headers=headers)
+    conversation_id = None
+    with TestSession() as db:
+        conversation_id = db.query(Analysis).filter_by(id=analysis_id).one().conversation_id
+    conversation = client.get(f"/conversations/{conversation_id}", headers=headers)
     deleted = client.delete(f"/analysis/{analysis_id}/feedback", headers=headers)
     history_after_delete = client.get("/analysis/history", headers=headers)
 
@@ -172,6 +185,12 @@ def test_feedback_can_be_deleted_and_stats_include_recent_negative_questions():
     assert stats.json()["total_votes"] == 1
     assert stats.json()["recent_negative_questions"][0]["question"] == "Quel est le total des ventes ?"
     assert history_before_delete.json()["items"][0]["feedback"]["comment"] == "Ne répond pas à la question"
+    restored_feedback = conversation.json()["messages"][1]
+    assert restored_feedback["analysis_id"] == analysis_id
+    assert restored_feedback["result_data"]["feedback"] == {
+        "rating": -1,
+        "comment": "Ne répond pas à la question",
+    }
     assert deleted.status_code == 204
     assert history_after_delete.json()["items"][0]["feedback"] is None
     with TestSession() as db:

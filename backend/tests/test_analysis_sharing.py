@@ -1,3 +1,4 @@
+import base64
 import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -77,6 +78,8 @@ def test_public_link_stores_only_hash_and_exposes_only_safe_analysis_fields():
 
     assert created.status_code == 201
     share_token = created.json()["token"]
+    token_bytes = base64.urlsafe_b64decode(share_token + "=" * (-len(share_token) % 4))
+    assert len(token_bytes) == 32
     with TestSession() as db:
         share = db.query(ShareLink).one()
         assert share.token_hash == hashlib.sha256(share_token.encode()).hexdigest()
@@ -107,6 +110,20 @@ def test_public_link_stores_only_hash_and_exposes_only_safe_analysis_fields():
         "/analysis/history",
         headers={"Authorization": f"Bearer {share_token}"},
     ).status_code == 401
+
+
+def test_share_token_is_not_accepted_as_bearer_authentication():
+    _, analysis_id, headers, _ = _seed()
+    created = client.post(
+        f"/analysis/{analysis_id}/share",
+        json={"expires_in_days": 1},
+        headers=headers,
+    )
+    share_token = created.json()["token"]
+    bearer = {"Authorization": f"Bearer {share_token}"}
+
+    assert client.get("/analysis/history", headers=bearer).status_code == 401
+    assert client.get("/analysis/stats", headers=bearer).status_code == 401
 
 
 def test_wrong_expired_and_revoked_tokens_have_the_same_not_found_response():

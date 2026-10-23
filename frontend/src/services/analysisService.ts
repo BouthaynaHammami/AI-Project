@@ -26,6 +26,7 @@ export type ConversationSummary = {
 }
 export type ConversationMessage = {
   id: number
+  analysis_id?: number | null
   role: 'user' | 'assistant'
   content: string
   result_data?: {
@@ -34,6 +35,7 @@ export type ConversationMessage = {
     generated_code?: string | null
     code_explanation?: string | null
     code_retried?: boolean
+    feedback?: Feedback | null
   } | null
   created_at: string
 }
@@ -77,8 +79,15 @@ export async function askQuestion(datasetIds: number[], question: string) {
   return data
 }
 
-export async function getConversations(params: { q?: string; favorite?: boolean } = {}) {
-  const { data } = await api.get<ConversationSummary[]>('/conversations', { params })
+export async function getConversations(params: {
+  q?: string
+  favorite?: boolean
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+} = {}) {
+  const { signal, ...query } = params
+  const { data } = await api.get<ConversationSummary[]>('/conversations', { params: query, signal })
   return data
 }
 
@@ -126,6 +135,20 @@ export async function deleteAnalysis(analysisId: number) {
   await api.delete(`/analysis/${analysisId}`)
 }
 
+export async function exportAnalysis(analysisId: number, format: 'pdf' | 'xlsx') {
+  const response = await api.get<Blob>(`/analysis/${analysisId}/export`, {
+    params: { format },
+    responseType: 'blob',
+  })
+  const disposition = response.headers['content-disposition'] as string | undefined
+  const filenameMatch = disposition?.match(/filename=(?:"([^"]+)"|([^;]+))/i)
+  const filename = filenameMatch?.[1] ?? filenameMatch?.[2]?.trim()
+  return {
+    blob: response.data,
+    filename: filename && !/[\\/\r\n]/.test(filename) ? filename : `analyse-${analysisId}.${format}`,
+  }
+}
+
 export async function restoreAnalysis(analysisId: number) {
   const { data } = await api.post<AnalysisHistory>(`/analysis/${analysisId}/restore`)
   return data
@@ -140,9 +163,15 @@ export async function deleteFeedback(analysisId: number) {
   await api.delete(`/analysis/${analysisId}/feedback`)
 }
 
-export async function getSuggestions(datasetIds: number[]) {
-  const { data } = await api.post<{ suggestions: SuggestedQuestion[] }>('/analysis/suggestions', { dataset_ids: datasetIds })
-  return data.suggestions
+export async function getSuggestions(datasetIds: number[], refresh = false, signal?: AbortSignal) {
+  const { data } = await api.get<{ suggestions: SuggestedQuestion[]; source: 'ai' | 'rules' | 'cache' }>(
+    '/analysis/suggestions',
+    {
+      params: { dataset_ids: datasetIds.join(','), refresh },
+      signal,
+    },
+  )
+  return data
 }
 
 export async function createShareLink(analysisId: number, expiresInDays: 1 | 7 | 30) {

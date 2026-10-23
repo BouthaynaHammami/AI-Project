@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.groq_limit import GroqGlobalLimitExceeded
-from app.core.rate_limit import authenticated_user_rate_key, limiter
+from app.core.rate_limit import ANALYSIS_USER_RPM, authenticated_user_rate_key, limiter
 from app.core.security import get_current_user
 from app.models.analysis import Analysis
 from app.models.conversation import Conversation
@@ -258,7 +258,7 @@ def suggest_questions(
 
 
 @router.post("/ask", response_model=AnalysisAskResponse, dependencies=[Depends(check_quota)])
-@limiter.limit("5/minute", key_func=authenticated_user_rate_key)
+@limiter.limit(f"{ANALYSIS_USER_RPM}/minute", key_func=authenticated_user_rate_key)
 def ask_question(
     request: Request,
     analysis: AnalysisCreate,

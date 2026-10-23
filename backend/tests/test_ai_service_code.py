@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -50,6 +51,86 @@ def test_summary_parser_supports_legacy_plain_text():
 
     assert answer == "Réponse simple en français."
     assert explanation == ""
+
+
+def test_conversation_history_keeps_three_recent_turns_under_utf8_token_ceiling():
+    history = [
+        {"question": f"Question {index} ?", "answer": f"Réponse {index}", "code": f"print({index})"}
+        for index in range(4)
+    ]
+
+    serialized = ai_service._serialize_conversation_history(history)
+    bounded = ai_service._bounded_conversation_history(history)
+
+    assert len(bounded) == 3
+    assert [item["question"] for item in bounded] == ["Question 1 ?", "Question 2 ?", "Question 3 ?"]
+    assert len(serialized.encode("utf-8")) <= 1800
+
+
+def test_conversation_history_ceiling_accounts_for_json_escaping():
+    history = [
+        {"question": '"\\' * 300, "answer": '"\\' * 300, "code": '"\\' * 300}
+        for _ in range(3)
+    ]
+
+    serialized = ai_service._serialize_conversation_history(history)
+
+    assert len(json.loads(serialized)) == 3
+    assert len(serialized.encode("utf-8")) <= 1800
+
+
+def test_analyze_dataset_counts_requested_gender_without_requiring_groq(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    dataframe = pd.DataFrame({
+        "GENDER": ["Female", " female ", "Femme", "Male", None],
+    })
+
+    result = ai_service.analyze_dataset(
+        "Je souhaite connaître le nombre de patientes femme.",
+        dataframe,
+    )
+
+    assert result["answer"] == "Le nombre de femmes est de 3."
+    assert result["code_explanation"] == (
+        "Le calcul compte les lignes où la colonne « GENDER » correspond à la catégorie Female."
+    )
+    assert result["tokens_in"] == 0
+    assert result["model"] == "local-count"
+
+
+def test_gender_count_rule_does_not_handle_grouped_questions():
+    dataframe = pd.DataFrame({"GENDER": ["Female", "Male"], "CITY": ["Paris", "Lyon"]})
+
+    result = ai_service._count_gender_request(
+        "Combien de femmes par ville ?",
+        dataframe,
+    )
+
+    assert result is None
+
+
+def test_analyze_dataset_calculates_age_mean_without_groq(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    dataframe = pd.DataFrame({"Age": [20, 30, None, 40]})
+
+    result = ai_service.analyze_dataset("Quel est l'âge moyen des patients ?", dataframe)
+
+    assert result["answer"] == "La moyenne de « Age » est 30."
+    assert result["code"] == "print(df['Age'].dropna().mean())"
+    assert result["tokens_in"] == 0
+    assert result["model"] == "local-statistic"
+
+
+def test_simple_numeric_request_supports_extrema_and_rejects_grouped_requests():
+    dataframe = pd.DataFrame({"Age": [20, 30, 40], "City ID": [1, 2, 1]})
+
+    assert ai_service._simple_numeric_request("Quel est l'âge minimum ?", dataframe)["answer"] == (
+        "La valeur minimale de « Age » est 20."
+    )
+    assert ai_service._simple_numeric_request("Quel est l'âge maximum ?", dataframe)["answer"] == (
+        "La valeur maximale de « Age » est 40."
+    )
+    assert ai_service._simple_numeric_request("Quel est l'âge moyen par City ID ?", dataframe) is None
 
 
 def test_execute_code_captures_json_safe_result_table_up_to_one_thousand_rows():
@@ -159,10 +240,14 @@ def test_chart_validator_rejects_invalid_types_lengths_values_and_point_limits()
         {**base, "type": "radar"},
         {**base, "series": [{"name": "Ventes", "values": [10]}]},
         {**base, "series": [{"name": "Ventes", "values": [10, float("nan")]}]},
+        {**base, "series": [{"name": "Ventes", "values": [10, float("inf")]}]},
+        {**base, "series": [{"name": "Ventes", "values": [10, True]}]},
         {**base, "series": [{"name": "Montant", "values": [10, 20]}, {"name": "Montant", "values": [30, 40]}]},
         {**base, "labels": [str(index) for index in range(21)], "series": [{"name": "Ventes", "values": list(range(21))}]},
         {**base, "type": "pie", "labels": [str(index) for index in range(9)], "series": [{"name": "Ventes", "values": list(range(9))}]},
         {**base, "type": "scatter"},
+        {**base, "labels": ["Nord", None]},
+        {**base, "title": []},
     ]
 
     assert all(ai_service._validate_chart_data(chart) is None for chart in invalid_charts)
@@ -187,11 +272,18 @@ def test_chart_validator_allows_fifty_scatter_points_only_with_numeric_x_values(
         "labels": ["Nord", "Sud"],
         "series": [{"name": "Mesure", "values": [1, 2]}],
     })
+    non_finite_x = ai_service._validate_chart_data({
+        "type": "scatter",
+        "title": "Relation",
+        "labels": ["1", "inf"],
+        "series": [{"name": "Mesure", "values": [1, 2]}],
+    })
 
     assert valid is not None
     assert len(valid["labels"]) == 50
     assert too_many is None
     assert non_numeric_x is None
+    assert non_finite_x is None
 
 
 def test_analyze_dataset_does_not_create_a_chart_from_unrelated_column_values(monkeypatch):

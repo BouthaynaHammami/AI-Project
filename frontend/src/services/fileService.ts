@@ -92,13 +92,13 @@ export async function getDatasetHistory() {
 }
 
 export async function updatePiiPreferences(datasetId: number, preferences: Record<string, PiiPreference>) {
-  const { data } = await api.put<Record<string, PiiPreference>>(
+  const { data } = await api.put<{ dataset_id: number; preferences: Record<string, PiiPreference> }>(
     `/files/${datasetId}/pii-preferences`,
     { preferences },
   )
-  return data
+  return data.preferences
 }
 
-export async function deleteDataset(datasetId: number) {
-  await api.delete(`/files/${datasetId}`)
+export async function deleteDataset(datasetId: number, cascade = false) {
+  await api.delete(`/files/${datasetId}`, { params: { cascade } })
 }

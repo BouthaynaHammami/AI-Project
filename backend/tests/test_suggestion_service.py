@@ -145,6 +145,40 @@ def test_pii_in_late_category_value_is_not_sent_to_groq(monkeypatch):
     assert "[DONNÉE PERSONNELLE]" in prompt
 
 
+def test_name_columns_are_masked_even_when_pii_preferences_allow_them(monkeypatch):
+    suggestion_service.clear_suggestion_cache()
+    captured = []
+    _mock_groq(monkeypatch, "malformed", captured)
+    dataframe = pd.DataFrame({
+        "customer_name": ["Alice Martin", "Bob Dupont"],
+        "montant": [100, 200],
+    })
+    context = suggestion_service.build_data_context(dataframe)
+
+    suggestion_service.get_suggestions(context, user_id=14)
+
+    prompt = captured[0]["messages"][0]["content"]
+    assert "Alice Martin" not in prompt
+    assert "Bob Dupont" not in prompt
+    assert '"values":"[DONNÉE PERSONNELLE]"' in prompt
+
+
+def test_global_groq_limit_falls_back_to_rule_suggestions(monkeypatch):
+    suggestion_service.clear_suggestion_cache()
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+    def raise_global_limit():
+        raise suggestion_service.GroqGlobalLimitExceeded(retry_after=30)
+
+    monkeypatch.setattr(suggestion_service, "acquire_groq_slot", raise_global_limit)
+    context = suggestion_service.build_data_context(_sales_dataframe(), ["ventes.csv"])
+
+    result = suggestion_service.get_suggestions(context, user_id=15)
+
+    assert result.source == "rules"
+    assert len(result.suggestions) >= 3
+
+
 def test_missing_groq_key_uses_rules_and_cache_is_user_scoped(monkeypatch):
     suggestion_service.clear_suggestion_cache()
     monkeypatch.delenv("GROQ_API_KEY", raising=False)

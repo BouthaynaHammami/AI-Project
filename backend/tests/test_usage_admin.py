@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
+from app.core.rate_limit import limiter
 from app.core.security import create_access_token
 from app.main import app
 from app.models.analysis import Analysis
@@ -34,6 +35,7 @@ def _override_get_db():
 def setup_function():
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
+    limiter.reset()
     app.dependency_overrides[get_db] = _override_get_db
 
 
@@ -92,6 +94,46 @@ def test_month_boundaries_reset_including_december_rollover():
     december = datetime(2026, 12, 31, 23, 59, tzinfo=timezone.utc)
     assert month_start_utc(december) == datetime(2026, 12, 1, tzinfo=timezone.utc)
     assert next_month_start_utc(december) == datetime(2027, 1, 1, tzinfo=timezone.utc)
+
+
+def test_failed_server_side_usage_does_not_consume_monthly_quota():
+    user_id, headers = _create_user(quota=1)
+    with TestSession() as db:
+        db.add(UsageEvent(
+            user_id=user_id,
+            type="analysis",
+            tokens_in=0,
+            tokens_out=0,
+            model=None,
+            status="error",
+        ))
+        db.commit()
+
+    rejected_dataset = client.post(
+        "/analysis/ask",
+        json={"dataset_ids": [999], "question": "Analyse"},
+        headers=headers,
+    )
+    usage = client.get("/usage/me", headers=headers)
+
+    assert rejected_dataset.status_code == 404
+    assert usage.json()["used"] == 0
+
+
+def test_analysis_route_applies_per_user_requests_per_minute_limit():
+    _, headers = _create_user()
+    responses = [
+        client.post(
+            "/analysis/ask",
+            json={"dataset_ids": [999], "question": f"Question {index}"},
+            headers=headers,
+        )
+        for index in range(6)
+    ]
+
+    assert all(response.status_code == 404 for response in responses[:5])
+    assert responses[5].status_code == 429
+    assert int(responses[5].headers["retry-after"]) > 0
 
 
 def test_non_admin_cannot_access_admin_routes_and_admin_can_manage_quota():

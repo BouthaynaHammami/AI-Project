@@ -29,6 +29,7 @@ const props = () => ({
   onSaveName: vi.fn(),
   onSavePhoto: vi.fn(),
   onAccountDeleted: vi.fn(),
+  onVerifyEmail: vi.fn().mockResolvedValue(undefined),
 })
 
 afterEach(() => {
@@ -93,5 +94,33 @@ describe('SettingsPage', () => {
       email: 'new@example.com',
       current_password: 'CurrentSecure123!',
     }))
+  })
+
+  it('keeps a pending email visible and lets the user verify it', async () => {
+    getProfile.mockResolvedValueOnce(profile).mockResolvedValueOnce({
+      ...profile,
+      email: 'new@example.com',
+      email_change_pending: false,
+      pending_email: null,
+    })
+    updateProfile.mockResolvedValue({
+      ...profile,
+      email_change_pending: true,
+      pending_email: 'new@example.com',
+    })
+    const handlers = props()
+    render(<SettingsPage {...handlers} />)
+
+    await waitFor(() => expect((screen.getByLabelText('Email professionnel') as HTMLInputElement).value).toBe(profile.email))
+    fireEvent.change(screen.getByLabelText('Email professionnel'), { target: { value: 'new@example.com' } })
+    fireEvent.change(screen.getByLabelText('Mot de passe actuel'), { target: { value: 'CurrentSecure123!' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enregistrer' }))
+
+    const codeInput = await screen.findByLabelText('Code de vérification')
+    fireEvent.change(codeInput, { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Vérifier cette adresse' }))
+
+    await waitFor(() => expect(handlers.onVerifyEmail).toHaveBeenCalledWith('new@example.com', '123456'))
+    expect(await screen.findByText('Votre adresse email a été vérifiée.')).toBeTruthy()
   })
 })

@@ -15,15 +15,18 @@ def test_detect_pii_reports_sensitive_columns_and_value_counts():
         "cin": ["12345678", "invalid"],
         "ip": ["192.168.1.10", "invalid"],
         "ip_v6": ["2001:db8::1", "invalid"],
+        "contact_info": ["+216 20 123 456", "no contact"],
     })
 
     report = detect_pii(dataframe)
 
-    assert report["column_count"] == 7
+    assert report["column_count"] == 8
     assert [column["category"] for column in report["columns"]] == [
         "email", "téléphone", "iban", "carte bancaire", "CIN", "IP", "IP",
+        "téléphone",
     ]
-    assert report["values_touched"] == 12
+    assert report["columns"][-1]["confidence"] == "medium"
+    assert report["values_touched"] == 13
 
 
 def test_prepare_dataframes_keeps_execution_values_and_masks_prompt_values():

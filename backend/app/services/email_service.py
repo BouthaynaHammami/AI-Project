@@ -1,9 +1,11 @@
 import logging
 import os
 import smtplib
+from html import escape
 from typing import Literal
 from pathlib import Path
 from email.message import EmailMessage
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 LOGO_PATH = Path(__file__).resolve().parents[3] / "ai-data-analyst-icon.jpg"
@@ -16,6 +18,18 @@ def get_email_delivery_mode() -> EmailDeliveryMode:
     if os.getenv("ENV", "").lower() == "dev":
         return "console"
     return "unavailable"
+
+
+def _frontend_url() -> str | None:
+    for configured_origin in os.getenv("FRONTEND_ORIGIN", "").split(","):
+        origin = configured_origin.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed_origin = urlsplit(origin)
+        if parsed_origin.scheme in {"http", "https"} and parsed_origin.netloc:
+            return origin
+        logger.warning("Skipping email action link because FRONTEND_ORIGIN is not a valid HTTP(S) URL.")
+    return None
 
 
 def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
@@ -34,12 +48,28 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
         intro = "Utilisez le code ci-dessous pour réinitialiser le mot de passe de votre compte AI Data Analyst."
         security_note = "Si vous n’êtes pas à l’origine de cette demande, vous pouvez ignorer cet e-mail. Votre mot de passe ne sera pas modifié."
 
+    frontend_url = _frontend_url()
+    plain_action = f"Accéder à AI Data Analyst : {frontend_url}\n\n" if frontend_url else ""
     plain_text = (
         f"Bonjour,\n\n{intro}\n\n"
         f"Votre code : {code}\n\n"
-        "Ce code expire dans 10 minutes.\n\n"
+        f"Ce code expire dans 10 minutes.\n\n{plain_action}"
         f"{security_note}\n\n"
         "© 2026 AI Data Analyst. Tous droits réservés."
+    )
+    action_link = (
+        f"""\
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 24px;">
+                  <tr>
+                    <td class="action-button" align="center" bgcolor="#2563EB" style="background-color:#2563EB;border-radius:8px;">
+                      <a href="{escape(frontend_url, quote=True)}" style="display:block;padding:14px 20px;color:#FFFFFF;font-size:14px;line-height:20px;font-weight:700;text-align:center;text-decoration:none;border-radius:8px;">
+                        Ouvrir AI Data Analyst
+                      </a>
+                    </td>
+                  </tr>
+                </table>"""
+        if frontend_url
+        else ""
     )
     html = f"""\
 <!doctype html>
@@ -53,7 +83,8 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
       @media only screen and (max-width: 600px) {{
         .page-padding {{ padding: 20px 12px !important; }}
         .card-padding {{ padding: 28px 22px !important; }}
-        .code-box {{ font-size: 34px !important; letter-spacing: 8px !important; }}
+        .code-box {{ padding-left: 20px !important; font-size: 34px !important; letter-spacing: 8px !important; }}
+        .action-button a {{ padding: 15px 18px !important; }}
       }}
     </style>
   </head>
@@ -64,14 +95,20 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
         <td class="page-padding" align="center" style="padding:36px 16px;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;">
             <tr>
-              <td align="center" style="padding:0 0 24px;">
+              <td align="center" style="padding:0 0 16px;">
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                   <tr>
-                    <td valign="middle" style="padding-right:12px;">
-                      <img src="cid:ai-data-analyst-logo" width="44" height="44" alt="Logo AI Data Analyst" style="display:block;width:44px;height:44px;border:0;border-radius:10px;">
-                    </td>
-                    <td valign="middle" style="font-size:18px;line-height:24px;font-weight:700;color:#0B1F3A;white-space:nowrap;">
-                      AI Data Analyst
+                    <td align="center" valign="middle" bgcolor="#FFFFFF" style="padding:16px 22px;background-color:#FFFFFF;border:1px solid #DBEAFE;border-radius:12px;">
+                      <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                        <tr>
+                          <td valign="middle" style="padding-right:12px;">
+                            <img src="cid:ai-data-analyst-logo" width="44" height="44" alt="Logo AI Data Analyst" style="display:block;width:44px;height:44px;border:0;border-radius:10px;">
+                          </td>
+                          <td valign="middle" style="font-size:18px;line-height:24px;font-weight:700;color:#0B1F3A;white-space:nowrap;">
+                            AI Data Analyst
+                          </td>
+                        </tr>
+                      </table>
                     </td>
                   </tr>
                 </table>
@@ -85,7 +122,7 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
                 <p style="margin:0 0 24px;font-size:15px;line-height:24px;color:#475569;">{intro}</p>
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 18px;">
                   <tr>
-                    <td class="code-box" align="center" style="padding:20px 12px;background-color:#EFF6FF;border:1px solid #DBEAFE;border-radius:12px;font-family:Arial,Helvetica,sans-serif;font-size:40px;line-height:48px;font-weight:700;letter-spacing:12px;color:#2563EB;">
+                    <td class="code-box" align="center" dir="ltr" style="padding:20px 12px 20px 24px;background-color:#EFF6FF;border:1px solid #DBEAFE;border-radius:12px;font-family:Arial,Helvetica,sans-serif;font-size:40px;line-height:48px;font-weight:700;letter-spacing:12px;color:#2563EB;font-variant-numeric:tabular-nums;">
                       {code}
                     </td>
                   </tr>
@@ -94,6 +131,7 @@ def _email_content(code: str, purpose: str) -> tuple[str, str, str]:
                   <span style="color:#2563EB;font-weight:700;">&#9201;</span>
                   Ce code expire dans <strong style="color:#0B1F3A;">10 minutes</strong>.
                 </p>
+                {action_link}
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 24px;">
                   <tr>
                     <td style="padding:14px 16px;background-color:#F8FAFC;border-left:3px solid #3B82F6;border-radius:4px;font-size:12px;line-height:19px;color:#64748B;">

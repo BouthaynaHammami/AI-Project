@@ -153,9 +153,17 @@ http://localhost:8000/docs
 - `POST /auth/forgot-password`
 - `POST /auth/reset-password`
 
-Les codes expirent après 10 minutes. Les comptes antérieurs à cette vérification
-peuvent être marqués comme vérifiés après migration avec
-`UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;`.
+Les codes sont valables 10 minutes, limités à cinq essais, et leur renvoi est
+soumis à un délai de 60 secondes. Pour conserver l'accès des comptes existants,
+exécuter **avant de déployer le nouveau flux d'inscription** :
+
+```sql
+UPDATE users SET is_verified = TRUE WHERE is_verified = FALSE;
+```
+
+Cette commande ne doit pas être relancée après le déploiement, car elle
+marquerait aussi comme vérifiés les nouveaux comptes qui n'ont pas confirmé
+leur adresse.
 
 Le frontend conserve actuellement le jeton d’accès dans `localStorage` pour
 préserver la compatibilité avec l’API bearer existante. Une faille XSS pourrait

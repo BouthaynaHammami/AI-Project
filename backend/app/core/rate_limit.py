@@ -1,3 +1,5 @@
+import os
+
 from slowapi import Limiter
 from jose import JWTError, jwt
 from slowapi.util import get_remote_address
@@ -5,6 +7,7 @@ from slowapi.util import get_remote_address
 from app.core.security import ALGORITHM, SECRET_KEY
 
 limiter = Limiter(key_func=get_remote_address)
+ANALYSIS_USER_RPM = max(1, int(os.getenv("ANALYSIS_USER_RPM", "5")))
 
 
 def authenticated_user_rate_key(request) -> str:

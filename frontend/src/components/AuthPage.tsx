@@ -34,7 +34,7 @@ function passwordDeliveryNotice(response?: SignupAccepted) {
     return 'Le service email n’est pas configuré. Demandez à l’administrateur de configurer le serveur SMTP.'
   }
   if (response?.delivery_mode === 'email') {
-    return 'Si cette adresse est associée à un compte, un email contenant un code a été envoyé. Vérifiez aussi vos courriers indésirables.'
+    return 'Si cette adresse est associée à un compte, la demande d’envoi du code a été prise en compte. Vérifiez vos courriers indésirables.'
   }
   return 'Si cette adresse est associée à un compte, un email contenant un code sera envoyé.'
 }

@@ -18,7 +18,7 @@ import {
 } from 'recharts'
 import type { ChartConfig, ChartSeries, ChartType } from '../types'
 
-const COLORS = ['#2563EB', '#0B1F3A', '#1D4ED8', '#1E40AF', '#3B82F6', '#172554', '#1E3A8A', '#1E293B']
+const COLORS = ['#2563EB', '#0B1F3A', '#3B82F6', '#0B1F3A', '#2563EB']
 
 type NormalizedChart = {
 	type: ChartType
@@ -46,6 +46,7 @@ function normalizeChart(config: ChartConfig): NormalizedChart | null {
 		|| item.values.length !== labels.length
 		|| item.values.some((value) => typeof value !== 'number' || !Number.isFinite(value))
 	)) return null
+	if (!['bar', 'line', 'pie', 'scatter'].includes(config.type ?? 'bar')) return null
 	return {
 		type: config.type ?? 'bar',
 		title: config.title || 'Résultat',

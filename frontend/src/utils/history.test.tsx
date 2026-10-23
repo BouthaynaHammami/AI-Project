@@ -35,6 +35,8 @@ const sampleConversation = vi.hoisted(() => ({
   created_at: '2026-10-04T10:00:00Z',
   updated_at: '2026-10-04T10:00:00Z',
 }))
+const getConversationMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ...sampleConversation, messages: [] }))
+const datasetHistoryMock = vi.hoisted(() => vi.fn().mockResolvedValue([]))
 const conversationStore = vi.hoisted(() => ({
   items: [] as Array<{
     id: number
@@ -53,14 +55,16 @@ vi.mock('../services/analysisService', () => ({
   deleteConversation: vi.fn().mockImplementation(async (id: number) => {
     conversationStore.items = conversationStore.items.filter((conversation) => conversation.id !== id)
   }),
-  getConversation: vi.fn().mockResolvedValue({ ...sampleConversation, messages: [] }),
+  deleteAnalysis: vi.fn().mockResolvedValue(undefined),
+  getConversation: getConversationMock,
   getConversations: vi.fn().mockImplementation(async () => conversationStore.items),
+  restoreAnalysis: vi.fn().mockResolvedValue(undefined),
   updateConversation: vi.fn().mockResolvedValue(sampleConversation),
 }))
 
 vi.mock('../services/fileService', () => ({
   deleteDataset: vi.fn().mockResolvedValue(undefined),
-  getDatasetHistory: vi.fn().mockResolvedValue([]),
+  getDatasetHistory: datasetHistoryMock,
   getDatasetPreview: vi.fn(),
 }))
 
@@ -68,6 +72,8 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   vi.clearAllMocks()
+  getConversationMock.mockResolvedValue({ ...sampleConversation, messages: [] })
+  datasetHistoryMock.mockResolvedValue([])
   conversationStore.items = [sampleConversation]
 })
 
@@ -89,6 +95,35 @@ describe('groupByDate', () => {
 })
 
 describe('history interactions', () => {
+  it('restores generated code and explanation from conversation history', async () => {
+    getConversationMock.mockResolvedValueOnce({
+      ...sampleConversation,
+      messages: [
+        { id: 1, role: 'user', content: 'Total ?', created_at: '2026-10-04T10:00:00Z' },
+        {
+          id: 2,
+          role: 'assistant',
+          content: 'Le total est 42.',
+          result_data: {
+            generated_code: "print(df['amount'].sum())",
+            code_explanation: 'Le code additionne les montants.',
+            code_retried: true,
+          },
+          created_at: '2026-10-04T10:00:01Z',
+        },
+      ],
+    })
+    const { result } = renderHook(() => useDemoData())
+
+    await act(async () => { await result.current.loadHistoryEntry(24) })
+
+    expect(result.current.messages[1]).toMatchObject({
+      generatedCode: "print(df['amount'].sum())",
+      codeExplanation: 'Le code additionne les montants.',
+      codeRetried: true,
+    })
+  })
+
   it('debounces rapid search input to one request', async () => {
     vi.useFakeTimers()
     const onSearch = vi.fn().mockResolvedValue(undefined)
@@ -198,10 +233,45 @@ describe('history interactions', () => {
     expect(entry.conversationId).toBe(24)
   })
 
-  it('keeps conversation deletion final after the action completes', async () => {
+  it('restores a pending conversation deletion when undo is clicked', async () => {
     const { result } = renderHook(() => useDemoData())
     await waitFor(() => expect(result.current.history).toHaveLength(1))
     await act(async () => { await result.current.remove(result.current.history[0]) })
     expect(result.current.history).toHaveLength(0)
+    expect(result.current.undoEntry).not.toBeNull()
+    await act(async () => { await result.current.undoRemove() })
+    expect(result.current.history).toHaveLength(1)
+    expect(result.current.undoEntry).toBeNull()
+  })
+
+  it('finalizes a pending conversation deletion after five seconds', async () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useDemoData())
+    await act(async () => { await result.current.refreshHistory() })
+    await act(async () => { await result.current.remove(result.current.history[0]) })
+    expect(result.current.history).toHaveLength(0)
+    await act(async () => { vi.advanceTimersByTime(5000) })
+    expect(result.current.undoEntry).toBeNull()
+    expect(result.current.history).toHaveLength(0)
+    const { deleteConversation } = await import('../services/analysisService')
+    expect(deleteConversation).toHaveBeenCalledWith(24)
+  })
+
+  it('delays dataset deletion for five seconds and cancels it on undo', async () => {
+    vi.useFakeTimers()
+    datasetHistoryMock.mockResolvedValue([
+      { id: 52, filename: 'ventes.csv', created_at: '2026-10-04T10:00:00Z' },
+    ])
+    const { result } = renderHook(() => useDemoData())
+    await act(async () => { await result.current.refreshHistory() })
+    const dataset = result.current.history.find((entry) => entry.kind === 'import')
+    expect(dataset).toBeDefined()
+    await act(async () => { await result.current.remove(dataset!) })
+    expect(result.current.history.some((entry) => entry.kind === 'import')).toBe(false)
+    await act(async () => { await result.current.undoRemove() })
+    await act(async () => { vi.advanceTimersByTime(5000) })
+    const { deleteDataset } = await import('../services/fileService')
+    expect(deleteDataset).not.toHaveBeenCalled()
+    expect(result.current.history.some((entry) => entry.kind === 'import')).toBe(true)
   })
 })

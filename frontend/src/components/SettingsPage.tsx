@@ -11,15 +11,28 @@ type Props = {
   onSaveName: (name: string) => void
   onSavePhoto: (photo: string) => void
   onAccountDeleted: (filesCleanupPending: number) => void
+  onVerifyEmail: (email: string, code: string) => Promise<void>
 }
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024
 
-export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, onSavePhoto, onAccountDeleted }: Props) {
+function getPasswordStrength(password: string) {
+  const score = [
+    password.length >= 10,
+    /\p{L}/u.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password),
+  ].filter(Boolean).length
+  return { score, label: score < 2 ? 'Faible' : score < 4 ? 'Moyen' : 'Fort' }
+}
+
+export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, onSavePhoto, onAccountDeleted, onVerifyEmail }: Props) {
   const photoInput = useRef<HTMLInputElement>(null)
   const [name, setName] = useState(initialName)
   const [email, setEmail] = useState('')
   const [originalEmail, setOriginalEmail] = useState('')
+  const [pendingEmail, setPendingEmail] = useState('')
+  const [emailCode, setEmailCode] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
@@ -27,11 +40,14 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [photoError, setPhotoError] = useState('')
+  const [verifyingEmail, setVerifyingEmail] = useState(false)
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false)
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
+  const passwordStrength = getPasswordStrength(password)
 
   useEffect(() => {
     getProfile()
@@ -39,6 +55,7 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
         setName(profile.name)
         setEmail(profile.email)
         setOriginalEmail(profile.email)
+        setPendingEmail(profile.pending_email ?? '')
         if (profilePhoto) setPhoto(profilePhoto)
       })
       .catch((profileError) => setError(getApiError(profileError)))
@@ -71,6 +88,7 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
 
   const save = async () => {
     setError('')
+    setNotice('')
     setPhotoError('')
 
     if (password && password !== passwordConfirmation) {
@@ -93,18 +111,50 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
         ...(emailChanged || password ? { current_password: currentPassword } : {}),
       })
 
-      onSaveName(profile.name)
       onSavePhoto(profile.profile_photo ?? '')
       setName(profile.name)
       setEmail(profile.email)
       setOriginalEmail(profile.email)
+      setPendingEmail(profile.pending_email ?? '')
       setCurrentPassword('')
       setPassword('')
       setPasswordConfirmation('')
+      if (profile.email_change_pending && profile.pending_email) {
+        setNotice(`Un code de vérification a été envoyé à ${profile.pending_email}.`)
+        setSaved(false)
+        return
+      }
+      onSaveName(profile.name)
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch (saveError) {
       setError(getApiError(saveError))
+    }
+  }
+
+  const verifyPendingEmail = async () => {
+    setError('')
+    setNotice('')
+    if (!pendingEmail || !/^\d{6}$/.test(emailCode)) {
+      setError('Saisissez le code de vérification à six chiffres.')
+      return
+    }
+
+    setVerifyingEmail(true)
+    try {
+      await onVerifyEmail(pendingEmail, emailCode)
+      const profile = await getProfile()
+      setEmail(profile.email)
+      setOriginalEmail(profile.email)
+      setPendingEmail(profile.pending_email ?? '')
+      setEmailCode('')
+      setNotice('Votre adresse email a été vérifiée.')
+      onSaveName(profile.name)
+      onSavePhoto(profile.profile_photo ?? '')
+    } catch (verifyError) {
+      setError(getApiError(verifyError))
+    } finally {
+      setVerifyingEmail(false)
     }
   }
 
@@ -141,6 +191,7 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
           </button>
         </div>
         {error && <div className="error-banner settings-error" role="alert">{error}</div>}
+        {notice && <p className="auth-notice" role="status">{notice}</p>}
         {photoError && <div className="error-banner settings-error" role="alert">{photoError}</div>}
         <div className="settings-layout">
           <section className="settings-card profile-card">
@@ -155,13 +206,28 @@ export function SettingsPage({ initialName, profilePhoto, onBack, onSaveName, on
             </div>
             <label>Nom complet<input value={name} onChange={(event) => { setName(event.target.value); setSaved(false) }} /></label>
             <label>Email professionnel<input type="email" value={email} onChange={(event) => { setEmail(event.target.value); setSaved(false) }} /></label>
+            {pendingEmail && (
+              <div className="email-verification-pending">
+                <p>Confirmez <strong>{pendingEmail}</strong> avec le code envoyé à cette adresse. Votre email actuel reste actif jusque-là.</p>
+                <label>Code de vérification<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>
+                <button className="photo-button" type="button" onClick={() => void verifyPendingEmail()} disabled={verifyingEmail}>
+                  {verifyingEmail ? 'Vérification...' : 'Vérifier cette adresse'}
+                </button>
+              </div>
+            )}
           </section>
           <section className="settings-card">
             <div className="settings-card-heading"><div><span className="section-kicker">SÉCURITÉ</span><h2>Modifier le mot de passe</h2></div><LockKeyhole size={18} /></div>
             <label>Mot de passe actuel<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label>
             <label>Nouveau mot de passe<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" /></label>
+            {password && (
+              <div className={`password-strength strength-${passwordStrength.score}`}>
+                <span className="password-strength-track"><span /></span>
+                <small>Force du mot de passe : {passwordStrength.label}</small>
+              </div>
+            )}
             <label>Confirmer le nouveau mot de passe<input type="password" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} placeholder="••••••••" /></label>
-            <p className="password-hint">Utilisez au moins 8 caractères avec un mélange de lettres et de chiffres.</p>
+            <p className="password-hint">Utilisez au moins 10 caractères avec une lettre et un chiffre.</p>
           </section>
         </div>
         <section className="settings-card danger-zone">

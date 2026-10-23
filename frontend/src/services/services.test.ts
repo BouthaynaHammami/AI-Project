@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
 vi.mock('./api', () => ({ api }))
 
 import { deleteAccount, login, logout, resetPassword, signup } from './authService'
+import { exportAnalysis, getSuggestions } from './analysisService'
 import { getDatasetPreview, updatePiiPreferences, uploadFiles } from './fileService'
 
 afterEach(() => {
@@ -20,7 +21,11 @@ describe('service HTTP contracts', () => {
   it('persists login tokens and clears them on logout', async () => {
     api.post.mockResolvedValueOnce({ data: { access_token: 'token', token_type: 'bearer' } })
     await login({ email: 'a@example.com', password: 'secret' })
-    expect(api.post).toHaveBeenCalledWith('/auth/login', { email: 'a@example.com', password: 'secret' })
+    expect(api.post).toHaveBeenCalledWith(
+      '/auth/login',
+      { email: 'a@example.com', password: 'secret' },
+      { headers: { 'X-Auth-Email': 'a@example.com' } },
+    )
     expect(localStorage.getItem('access_token')).toBe('token')
     api.post.mockResolvedValueOnce({ data: {} })
     await logout()
@@ -53,8 +58,37 @@ describe('service HTTP contracts', () => {
     const preview = await getDatasetPreview(9)
     expect(api.get).toHaveBeenCalledWith('/files/9/preview')
     expect(preview.dataset_id).toBe(9)
-    api.put.mockResolvedValue({ data: { email: 'exclude' } })
-    await updatePiiPreferences(9, { email: 'exclude' })
+    api.put.mockResolvedValue({ data: { dataset_id: 9, preferences: { email: 'exclude' } } })
+    const preferences = await updatePiiPreferences(9, { email: 'exclude' })
     expect(api.put).toHaveBeenCalledWith('/files/9/pii-preferences', { preferences: { email: 'exclude' } })
+    expect(preferences).toEqual({ email: 'exclude' })
+  })
+
+  it('requests suggestions with the selected dataset ids and supports cancellation', async () => {
+    const controller = new AbortController()
+    api.get.mockResolvedValue({ data: { suggestions: [], source: 'rules' } })
+
+    await getSuggestions([4, 9], true, controller.signal)
+
+    expect(api.get).toHaveBeenCalledWith('/analysis/suggestions', {
+      params: { dataset_ids: '4,9', refresh: true },
+      signal: controller.signal,
+    })
+  })
+
+  it('downloads an analysis export as a blob and extracts its safe filename', async () => {
+    const blob = new Blob(['xlsx'])
+    api.get.mockResolvedValueOnce({
+      data: blob,
+      headers: { 'content-disposition': 'attachment; filename="analyse-42-resultat.xlsx"' },
+    })
+
+    const result = await exportAnalysis(42, 'xlsx')
+
+    expect(api.get).toHaveBeenCalledWith('/analysis/42/export', {
+      params: { format: 'xlsx' },
+      responseType: 'blob',
+    })
+    expect(result).toEqual({ blob, filename: 'analyse-42-resultat.xlsx' })
   })
 })

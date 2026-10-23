@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import re
+import unicodedata
 from contextlib import redirect_stdout
 from typing import Any
 
@@ -301,7 +302,7 @@ def _build_first_prompt(
 ) -> str:
     """Construit le prompt principal."""
     chart_instruction = (
-        "9. Un fichier CSV/Excel est présent. Crée un graphique pertinent si possible en agrégeant les données, sans parcourir ni imprimer chaque ligne."
+        "9. Un fichier CSV/Excel est présent. Crée un graphique pertinent si la question le justifie, en agrégeant les données."
         if generate_chart
         else "9. Si la question nécessite un graphique, crée une variable"
     )
@@ -356,21 +357,22 @@ INSTRUCTIONS STRICTES :
 {chart_instruction} Dans ce cas, crée une variable `chart_data` sous cette forme :
 
 chart_data = {{
-    "type": "bar",
+    "type": "bar|line|pie|scatter",
     "title": "Titre du graphique",
     "x_label": "Axe horizontal",
     "y_label": "Axe vertical",
     "labels": ["A", "B"],
     "series": [
-        {{"name": "Série 1", "values": [10, 20]}}
+        {{"name": "Série 1", "values": [10, 20]}},
+        {{"name": "Série 2", "values": [8, 15]}}
     ]
 }}
 
-10. Choisis le type selon ces règles : évolution temporelle -> "line" ; parts d'un tout avec au plus 8 catégories -> "pie" ; relation entre deux colonnes numériques -> "scatter" ; sinon -> "bar".
+10. Choisis explicitement le type : évolution dans le temps -> "line" ; parts d'un tout avec au plus 8 catégories -> "pie" ; relation entre deux colonnes numériques -> "scatter" (labels numériques pour X, série pour Y) ; sinon -> "bar".
 
-11. Les labels doivent être des chaînes; chaque série contient des nombres finis dans le même ordre et en même nombre que les labels.
+11. Les labels sont des catégories ou des valeurs X; chaque série contient une valeur numérique finie par label. Pour comparer des groupes, crée une série par groupe avec un nom distinct.
 
-12. Limite à 20 points (50 pour "scatter"); agrège les données au lieu de tronquer arbitrairement les premières lignes.
+12. Limite à 20 points (50 pour "scatter"); agrège les données au lieu de tronquer arbitrairement les premières lignes. Si les données ne justifient pas de graphique, n'ajoute pas `chart_data`.
 
 13. Utilise uniquement les bibliothèques :
     - pandas
@@ -432,9 +434,9 @@ IMPORTANT :
 - Si tu produis un tableau, affecte le DataFrame final à `result_table` (maximum 1 000 lignes).
 - Garde le code sous 400 tokens, sans commentaires; n'imprime pas toutes les lignes ou le contenu intégral des documents.
 {chart_instruction}
-- Si tu crées un graphique, utilise la forme chart_data suivante : {{"type":"bar|line|pie|scatter","title":"...","x_label":"...","y_label":"...","labels":["..."],"series":[{{"name":"...","values":[1]}}]}}.
-- Choisis "line" pour une évolution temporelle, "pie" pour les parts d'un tout avec au plus 8 catégories, "scatter" pour deux variables numériques avec labels x numériques, sinon "bar".
-- Une série doit avoir une valeur finie par label; limite à 20 points (50 pour scatter), en agrégeant plutôt qu'en tronquant.
+- Si tu crées un graphique, utilise cette forme chart_data et une série distincte par groupe à comparer : {{"type":"bar|line|pie|scatter","title":"...","x_label":"...","y_label":"...","labels":["..."],"series":[{{"name":"...","values":[1]}},{{"name":"...","values":[2]}}]}}.
+- Choisis "line" pour une évolution temporelle, "pie" pour les parts d'un tout avec au plus 8 catégories, "scatter" pour la relation entre deux variables numériques (labels X numériques), sinon "bar".
+- Chaque série doit avoir une valeur numérique finie par label; limite à 20 points (50 pour scatter), en agrégeant plutôt qu'en tronquant. Si aucun graphique pertinent ne peut être construit, n'ajoute pas chart_data.
 - Réponds uniquement avec du code Python.
 """
 
@@ -494,33 +496,184 @@ def _parse_summary(text: str) -> tuple[str, str]:
 
 def _bounded_conversation_history(
     history: list[dict[str, str]],
-    max_chars: int = 2400,
+    max_bytes: int = 1800,
 ) -> list[dict[str, str]]:
-    """Retient uniquement trois échanges récents et borne leur taille."""
+    """Keep the latest exchanges under a UTF-8 byte ceiling for a safe token bound."""
+    field_limits = {"question": 100, "answer": 80, "code": 100}
     bounded = []
-    used_chars = 0
     for exchange in history[-3:]:
-        item = {
-            "question": str(exchange.get("question", ""))[:350],
-            "answer": str(exchange.get("answer", ""))[:500],
-            "code": str(exchange.get("code", ""))[:450],
-        }
-        item_size = sum(len(value) for value in item.values())
-        if used_chars + item_size > max_chars:
-            remaining = max_chars - used_chars
-            if remaining <= 0:
-                break
-            for key in ("question", "answer", "code"):
-                item[key] = item[key][:remaining]
-                remaining -= len(item[key])
-            item_size = sum(len(value) for value in item.values())
+        item = {}
+        for field, byte_limit in field_limits.items():
+            value = str(exchange.get(field, ""))
+            value = "".join(character if character.isprintable() else " " for character in value)
+            item[field] = value.encode("utf-8")[:byte_limit].decode("utf-8", errors="ignore")
         bounded.append(item)
-        used_chars += item_size
+
+    def serialized_size() -> int:
+        return len(json.dumps(bounded, ensure_ascii=False).encode("utf-8"))
+
+    while bounded and serialized_size() > max_bytes:
+        item = bounded[0]
+        field = next((key for key in ("code", "answer", "question") if item[key]), None)
+        if field is None:
+            bounded.pop(0)
+            continue
+        item[field] = item[field].encode("utf-8")[:-1].decode("utf-8", errors="ignore")
     return bounded
 
 
 def _serialize_conversation_history(history: list[dict[str, str]]) -> str:
     return json.dumps(_bounded_conversation_history(history), ensure_ascii=False)
+
+
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    return "".join(character for character in normalized if not unicodedata.combining(character))
+
+
+def _count_gender_request(question: str, df: pd.DataFrame) -> dict[str, Any] | None:
+    normalized_question = _normalize_text(question)
+    if not re.search(r"\b(combien|nombre|effectif|count|how many|number of)\b", normalized_question):
+        return None
+    if re.search(r"\b(par|by|group|groupe|repartition|distribution)\b", normalized_question):
+        return None
+
+    categories = {
+        "female": {
+            "female", "females", "femme", "femmes", "woman", "women",
+            "f", "female patient", "patiente", "patientes",
+        },
+        "male": {
+            "male", "males", "homme", "hommes", "man", "men",
+            "m", "male patient", "patient",
+        },
+    }
+    requested_gender = next(
+        (
+            gender
+            for gender, terms in categories.items()
+            if any(re.search(rf"\b{re.escape(term)}\b", normalized_question) for term in terms)
+        ),
+        None,
+    )
+    if requested_gender is None:
+        return None
+
+    gender_column = next(
+        (
+            column
+            for column in df.columns
+            if any(term in _normalize_text(str(column)) for term in ("gender", "sexe", "sex"))
+        ),
+        None,
+    )
+    if gender_column is None:
+        return None
+
+    aliases = {
+        "female": {"female", "females", "femme", "femmes", "woman", "women", "f", "female patient"},
+        "male": {"male", "males", "homme", "hommes", "man", "men", "m", "male patient"},
+    }
+    normalized_values = df[gender_column].astype("string").str.strip().str.casefold()
+    count = int(normalized_values.isin(aliases[requested_gender]).sum())
+    label = "femmes" if requested_gender == "female" else "hommes"
+    gender_label = "Female" if requested_gender == "female" else "Male"
+    category_values = sorted(aliases[requested_gender])
+    return {
+        "answer": f"Le nombre de {label} est de {count}.",
+        "chart_config": None,
+        "code": (
+            f"print(df[{str(gender_column)!r}].astype('string').str.strip()"
+            f".str.casefold().isin({category_values!r}).sum())"
+        ),
+        "retried": False,
+        "code_explanation": (
+            f"Le calcul compte les lignes où la colonne « {gender_column} » "
+            f"correspond à la catégorie {gender_label}."
+        ),
+        "result_table": None,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "model": "local-count",
+    }
+
+
+def _simple_numeric_request(question: str, df: pd.DataFrame) -> dict[str, Any] | None:
+    normalized_question = _normalize_text(question)
+    if re.search(r"\b(par|by|group|groupe|repartition|distribution)\b", normalized_question):
+        return None
+
+    operations = {
+        "mean": r"\b(moyenne|moyen|average|avg|mean)\b",
+        "minimum": r"\b(minimum|min|plus petit|plus faible|le moins)\b",
+        "maximum": r"\b(maximum|max|plus grand|plus eleve|le plus)\b",
+        "sum": r"\b(somme|total|sum)\b",
+        "median": r"\b(mediane|median)\b",
+    }
+    requested_operation = next(
+        (operation for operation, pattern in operations.items() if re.search(pattern, normalized_question)),
+        None,
+    )
+    if requested_operation is None:
+        return None
+
+    matching_columns = [
+        column
+        for column in df.columns
+        if pd.api.types.is_numeric_dtype(df[column])
+        and not pd.api.types.is_bool_dtype(df[column])
+        and re.search(
+            rf"\b{re.escape(_normalize_text(str(column)))}\b",
+            normalized_question,
+        )
+    ]
+    if len(matching_columns) != 1:
+        return None
+
+    column = matching_columns[0]
+    values = df[column].dropna()
+    if values.empty:
+        return None
+
+    statistic = {
+        "mean": values.mean,
+        "minimum": values.min,
+        "maximum": values.max,
+        "sum": values.sum,
+        "median": values.median,
+    }[requested_operation]()
+    if not math.isfinite(float(statistic)):
+        return None
+
+    value_text = f"{float(statistic):.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    labels = {
+        "mean": "La moyenne",
+        "minimum": "La valeur minimale",
+        "maximum": "La valeur maximale",
+        "sum": "La somme",
+        "median": "La médiane",
+    }
+    pandas_method = {
+        "mean": "mean",
+        "minimum": "min",
+        "maximum": "max",
+        "sum": "sum",
+        "median": "median",
+    }[requested_operation]
+    return {
+        "answer": f"{labels[requested_operation]} de « {column} » est {value_text}.",
+        "chart_config": None,
+        "code": f"print(df[{str(column)!r}].dropna().{pandas_method}())",
+        "retried": False,
+        "code_explanation": (
+            f"Le calcul ignore les valeurs vides de la colonne « {column} », "
+            f"puis calcule {labels[requested_operation].lower()}."
+        ),
+        "result_table": None,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "model": "local-statistic",
+    }
 
 
 def _resolve_follow_up(
@@ -608,6 +761,13 @@ def analyze_dataset(
         chart_config:
             Configuration JSON du graphique ou None.
     """
+
+    local_count = _count_gender_request(question, df)
+    if local_count is not None:
+        return local_count
+    local_statistic = _simple_numeric_request(question, df)
+    if local_statistic is not None:
+        return local_statistic
 
     # ------------------------------------------------------------------------
     # API KEY
@@ -737,7 +897,7 @@ def analyze_dataset(
                 {
                     "role": "user",
                     "content": _build_retry_prompt(
-                        safe_question,
+                        sanitize_text(resolved_question, sensitive_values),
                         dataset_summary,
                         sanitize_text(generated_code, sensitive_values),
                         error_message,
@@ -928,7 +1088,10 @@ def _validate_chart_data(chart_data: dict[str, Any]) -> dict[str, Any] | None:
         for value in values:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return None
-            numeric_value = float(value)
+            try:
+                numeric_value = float(value)
+            except (OverflowError, TypeError, ValueError):
+                return None
             if not math.isfinite(numeric_value):
                 return None
             normalized_values.append(numeric_value)
@@ -949,15 +1112,38 @@ def _validate_chart_data(chart_data: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if chart_type == "scatter":
         try:
-            [float(label) for label in labels]
-        except (TypeError, ValueError):
+            numeric_labels = [float(label) for label in labels]
+        except (OverflowError, TypeError, ValueError):
             return None
+        if not all(math.isfinite(label) for label in numeric_labels):
+            return None
+
+    normalized_labels: list[str] = []
+    for label in labels:
+        if isinstance(label, (dict, list, tuple, set)) or label is None or isinstance(label, bool):
+            return None
+        normalized_label = str(label)
+        if not normalized_label.strip() or len(normalized_label) > 160:
+            return None
+        normalized_labels.append(normalized_label)
+
+    title_value = chart_data.get("title")
+    x_label_value = chart_data.get("x_label")
+    y_label_value = chart_data.get("y_label")
+    if any(
+        value is not None and not isinstance(value, str)
+        for value in (title_value, x_label_value, y_label_value)
+    ):
+        return None
+    title = title_value or "Résultat"
+    x_label = x_label_value or ""
+    y_label = y_label_value or ""
 
     return {
         "type": chart_type,
-        "title": str(chart_data.get("title") or "Résultat"),
-        "x_label": str(chart_data.get("x_label") or ""),
-        "y_label": str(chart_data.get("y_label") or ""),
-        "labels": [str(label) for label in labels],
+        "title": title[:160] or "Résultat",
+        "x_label": x_label[:120],
+        "y_label": y_label[:120],
+        "labels": normalized_labels,
         "series": normalized_series,
     }

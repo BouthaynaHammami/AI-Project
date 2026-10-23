@@ -4,6 +4,19 @@ import { AnalysisBar } from './AnalysisBar'
 
 const uploadFiles = vi.hoisted(() => vi.fn())
 vi.mock('../services/fileService', () => ({ uploadFiles }))
+vi.mock('./SuggestedQuestions', () => ({
+  SuggestedQuestions: ({
+    datasetIds,
+    onSelect,
+  }: {
+    datasetIds: number[]
+    onSelect: (question: string) => void
+  }) => (
+    <button type="button" onClick={() => onSelect('Quel produit génère le plus de ventes ?')}>
+      Suggestions pour {datasetIds.join(',')}
+    </button>
+  ),
+}))
 
 afterEach(() => {
   cleanup()
@@ -18,7 +31,7 @@ describe('AnalysisBar', () => {
     expect(screen.getByRole('button', { name: "Lancer l'analyse" }).hasAttribute('disabled')).toBe(false)
   })
 
-  it('uploads selected CSV/XLSX files and reports the callback payload', async () => {
+  it('shows suggestions after upload and starts analysis when a suggestion is selected', async () => {
     const onAnalyze = vi.fn()
     uploadFiles.mockResolvedValue([{ dataset_id: 3, filename: 'ventes.csv' }])
     const { container } = render(<AnalysisBar onAnalyze={onAnalyze} />)
@@ -27,7 +40,14 @@ describe('AnalysisBar', () => {
     await waitFor(() => expect(screen.getByText('ventes.csv')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: "Lancer l'analyse" }))
     await waitFor(() => expect(uploadFiles).toHaveBeenCalledWith([file]))
-    expect(onAnalyze).toHaveBeenCalledWith([{ dataset_id: 3, filename: 'ventes.csv' }], '')
+    expect(screen.getByRole('button', { name: 'Suggestions pour 3' })).toBeTruthy()
+    expect(onAnalyze).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Suggestions pour 3' }))
+    await waitFor(() => expect(onAnalyze).toHaveBeenCalledWith(
+      [{ dataset_id: 3, filename: 'ventes.csv' }],
+      'Quel produit génère le plus de ventes ?',
+    ))
+    expect(uploadFiles).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unsupported files and displays upload failures', async () => {

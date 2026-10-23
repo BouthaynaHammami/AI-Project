@@ -105,25 +105,35 @@ def test_signup_stores_only_hash_and_verification_returns_token(monkeypatch):
     verified = client.post("/auth/verify-email", json={"email": email, "code": code})
     assert verified.status_code == 200
     assert verified.json()["access_token"]
+    claims = jwt.decode(verified.json()["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    assert claims["sub"] == "1"
+    assert claims["type"] == "access"
+    assert isinstance(claims["iat"], int)
+    assert claims["jti"]
     with TestSession() as db:
         assert db.query(User).filter_by(email=email).one().is_verified is True
         assert db.query(EmailCode).count() == 0
 
 
-def test_signup_reports_smtp_failure_and_removes_undeliverable_code(monkeypatch):
-    def fail_delivery(*_args):
+def test_signup_reports_acceptance_and_removes_undeliverable_code_in_background(monkeypatch, caplog):
+    monkeypatch.setenv("ENV", "production")
+    failed_codes: list[str] = []
+
+    def fail_delivery(_recipient, code, _purpose):
+        failed_codes.append(code)
         raise RuntimeError("SMTP unavailable")
 
     monkeypatch.setattr(auth_api, "send_email_code", fail_delivery)
+    monkeypatch.setattr(auth_api, "SessionLocal", TestSession)
     response = signup()
 
-    assert response.status_code == 503
-    assert "configuration SMTP" in response.json()["detail"]
+    assert response.status_code == 202
+    assert failed_codes and failed_codes[0] not in caplog.text
     with TestSession() as db:
         assert db.query(EmailCode).count() == 0
 
 
-def test_signup_with_unavailable_local_smtp_returns_console_delivery_mode(monkeypatch):
+def test_signup_queues_configured_local_smtp_and_logs_dev_fallback(monkeypatch, caplog):
     monkeypatch.setenv("ENV", "dev")
     monkeypatch.setenv("SMTP_HOST", "localhost")
     monkeypatch.setenv("SMTP_PORT", "1025")
@@ -134,7 +144,8 @@ def test_signup_with_unavailable_local_smtp_returns_console_delivery_mode(monkey
     response = signup()
 
     assert response.status_code == 202
-    assert response.json()["delivery_mode"] == "console"
+    assert response.json()["delivery_mode"] == "email"
+    assert "development email code" in caplog.text
     with TestSession() as db:
         assert db.query(EmailCode).count() == 1
 
@@ -447,6 +458,20 @@ def test_login_rate_limit_returns_retry_after():
     assert limited.status_code == 429
     assert limited.headers["retry-after"] == "60"
     assert "Trop de tentatives" in limited.json()["detail"]
+    another_email = client.post(
+        "/auth/login",
+        headers={"X-Auth-Email": "another@example.com"},
+        json={"email": "another@example.com", "password": "StrongPass123"},
+    )
+    assert another_email.status_code == 401
+
+
+def test_security_headers_are_applied():
+    response = client.get("/")
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
 
 
 def test_login_error_is_identical_for_unknown_email_and_wrong_password():

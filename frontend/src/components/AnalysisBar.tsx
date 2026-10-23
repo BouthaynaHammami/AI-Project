@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx'
 
 import { getApiError } from '../services/api'
 import { uploadFiles, type DatasetPreview } from '../services/fileService'
+import { SuggestedQuestions } from './SuggestedQuestions'
 
 type Props = {
   onAnalyze: (datasets: DatasetPreview[], question: string) => void
@@ -137,6 +138,7 @@ export function AnalysisBar({ onAnalyze }: Props) {
   const [question, setQuestion] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [uploadedDatasets, setUploadedDatasets] = useState<DatasetPreview[]>([])
 
   const chooseFiles = async (candidates: FileList | null) => {
     if (!candidates) return
@@ -185,20 +187,32 @@ export function AnalysisBar({ onAnalyze }: Props) {
   }
 
   const removeFile = (indexToRemove: number) => {
+    const previewUrl = previews[indexToRemove]?.previewUrl
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
     setFiles((previousFiles) => previousFiles.filter((_, index) => index !== indexToRemove))
     setPreviews((previousPreviews) => previousPreviews.filter((_, index) => index !== indexToRemove))
     setError('')
   }
 
-  const submit = async () => {
-    if (files.length === 0 && !question.trim()) return
+  const submit = async (questionToAsk = question) => {
+    if (files.length === 0 && uploadedDatasets.length === 0 && !questionToAsk.trim()) return
 
     setLoading(true)
     setError('')
 
     try {
-      const datasets = files.length > 0 ? await uploadFiles(files) : []
-      onAnalyze(datasets, question.trim())
+      const newDatasets = files.length > 0 ? await uploadFiles(files) : []
+      const datasets = [...uploadedDatasets, ...newDatasets]
+      if (newDatasets.length > 0) {
+        previews.forEach((preview) => {
+          if (preview.previewUrl) URL.revokeObjectURL(preview.previewUrl)
+        })
+        setUploadedDatasets(datasets)
+        setFiles([])
+        setPreviews([])
+      }
+      if (!questionToAsk.trim() && datasets.length > 0) return
+      onAnalyze(datasets, questionToAsk.trim())
     } catch (uploadError) {
       setError(getApiError(uploadError))
     } finally {
@@ -310,6 +324,10 @@ export function AnalysisBar({ onAnalyze }: Props) {
               )
             })}
           </div>
+        ) : uploadedDatasets.length > 0 ? (
+          <span className="file-hint" title={uploadedDatasets.map((dataset) => dataset.filename).join(', ')}>
+            Fichiers importés : {uploadedDatasets.map((dataset) => dataset.filename).join(', ')}
+          </span>
         ) : (
           <span className="file-hint">{loading ? 'Import en cours...' : 'Ajouter un fichier PDF, Word, CSV, Excel, image ou autre document'}</span>
         )}
@@ -324,6 +342,13 @@ export function AnalysisBar({ onAnalyze }: Props) {
             return content ? <div className="analysis-file-preview" key={preview.id}>{content}</div> : null
           })}
         </div>
+      )}
+
+      {uploadedDatasets.length > 0 && (
+        <SuggestedQuestions
+          datasetIds={uploadedDatasets.map((dataset) => dataset.dataset_id)}
+          onSelect={(suggestedQuestion) => void submit(suggestedQuestion)}
+        />
       )}
 
       {error && <div className="error-banner">{error}</div>}

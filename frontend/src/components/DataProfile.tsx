@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Columns3, Rows3, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, BarChart3, Columns3, Info, Rows3, ShieldAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { updatePiiPreferences, type DataProfile as DataProfileType, type PiiPreference, type PiiReport } from '../services/fileService'
 
@@ -103,12 +103,15 @@ export function DataProfile({ profile, datasetId, piiReport, piiPreferences }: P
 
       {profile.alerts.length > 0 && (
         <div className="profile-alerts" aria-label="Alertes de qualité">
-          {profile.alerts.map((alert, index) => (
-            <div className={`profile-alert profile-alert-${alert.severity}`} key={`${alert.type}-${alert.column}-${index}`}>
-              <AlertTriangle size={16} aria-hidden="true" />
-              <span>{alert.message}</span>
-            </div>
-          ))}
+          {profile.alerts.map((alert, index) => {
+            const AlertIcon = alert.severity === 'warning' ? AlertTriangle : Info
+            return (
+              <div className={`profile-alert profile-alert-${alert.severity}`} key={`${alert.type}-${alert.column}-${index}`}>
+                <AlertIcon size={16} aria-hidden="true" />
+                <span>{alert.message}</span>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -116,17 +119,17 @@ export function DataProfile({ profile, datasetId, piiReport, piiPreferences }: P
         <table className="profile-columns-table">
           <thead>
             <tr>
-              <th>Colonne</th>
-              <th>Type détecté</th>
-              <th>Valeurs manquantes</th>
-              <th>Valeurs uniques</th>
-              <th>Détails</th>
+              <th scope="col">Colonne</th>
+              <th scope="col">Type détecté</th>
+              <th scope="col">Valeurs manquantes</th>
+              <th scope="col">Valeurs uniques</th>
+              <th scope="col">Détails</th>
             </tr>
           </thead>
           <tbody>
             {profile.columns.map((column) => (
               <tr key={`${column.position}-${column.name}`}>
-                <td>{column.name || `Colonne ${column.position + 1}`}</td>
+                <th scope="row">{column.name || `Colonne ${column.position + 1}`}</th>
                 <td><span className="profile-type">{column.detected_type}</span></td>
                 <td>
                   <div className="profile-missing-cell">

@@ -7,7 +7,7 @@ type Props = {
   activeId: number
   query: string
   editingId: number | null
-  onHistory: (id: number) => void
+  onHistory: (item: HistoryEntry) => void
   onStartRename: (id: number) => void
   onRename: (item: HistoryEntry, title: string) => Promise<void>
   onCancelRename: () => void
@@ -26,10 +26,10 @@ export function HistoryGroup(props: Props) {
           <HistoryItem
             key={`${item.kind}-${item.id}`}
             item={item}
-            active={props.activeId === item.id}
+            active={props.activeId === (item.conversationId ?? item.id)}
             query={props.query}
             editing={props.editingId === item.id}
-            onClick={() => props.onHistory(item.id)}
+            onClick={() => props.onHistory(item)}
             onStartRename={() => props.onStartRename(item.id)}
             onRename={(title) => props.onRename(item, title)}
             onCancelRename={props.onCancelRename}

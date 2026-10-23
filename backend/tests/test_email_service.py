@@ -41,6 +41,7 @@ def test_verification_email_includes_responsive_html_plain_text_and_inline_logo(
     monkeypatch.setenv("SMTP_PASSWORD", "smtp-password")
     monkeypatch.setenv("SMTP_FROM", "AI Data Analyst <no-reply@example.test>")
     monkeypatch.setenv("SMTP_TLS", "true")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://app.example.test")
     monkeypatch.setattr(email_service.smtplib, "SMTP", FakeSMTP)
     FakeSMTP.sent_message = None
 
@@ -50,7 +51,9 @@ def test_verification_email_includes_responsive_html_plain_text_and_inline_logo(
     message = FakeSMTP.sent_message
     assert message is not None
     assert message["Subject"] == "Vérifiez votre adresse e-mail"
-    assert message.get_body(preferencelist=("plain",)).get_content().find("903885") >= 0
+    plain_text = message.get_body(preferencelist=("plain",)).get_content()
+    assert "903885" in plain_text
+    assert "https://app.example.test" in plain_text
     html = message.get_body(preferencelist=("html",))
     assert html is not None
     html_content = html.get_content()
@@ -59,6 +62,9 @@ def test_verification_email_includes_responsive_html_plain_text_and_inline_logo(
     assert "#0B1F3A" in html_content
     assert "#2563EB" in html_content
     assert "@media only screen and (max-width: 600px)" in html_content
+    assert 'href="https://app.example.test"' in html_content
+    assert "Ouvrir AI Data Analyst" in html_content
+    assert ".action-button a" in html_content
 
     inline_logo = next(
         part for part in message.walk()
@@ -76,6 +82,7 @@ def test_password_reset_email_uses_same_branded_template(monkeypatch):
     monkeypatch.setenv("SMTP_PASSWORD", "")
     monkeypatch.setenv("SMTP_FROM", "no-reply@example.test")
     monkeypatch.setenv("SMTP_TLS", "false")
+    monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
     monkeypatch.setattr(email_service.smtplib, "SMTP", FakeSMTP)
     FakeSMTP.sent_message = None
 

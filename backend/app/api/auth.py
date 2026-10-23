@@ -1,12 +1,12 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.rate_limit import limiter
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
@@ -39,7 +39,7 @@ from app.schemas.auth import (
     UserUpdate,
     VerifyEmailRequest,
 )
-from app.services.email_code_service import consume_email_code, issue_email_code
+from app.services.email_code_service import consume_email_code, hash_email_code, issue_email_code
 from app.services.email_service import (
     EmailDeliveryMode,
     get_email_delivery_mode,
@@ -49,7 +49,7 @@ from app.services.file_service import UPLOAD_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-SIGNUP_ACCEPTED_MESSAGE = "Si cette adresse peut être traitée, un email contenant un code a été envoyé."
+SIGNUP_ACCEPTED_MESSAGE = "Si cette adresse peut être traitée, la demande d'envoi d'un code a été prise en compte."
 
 
 def login_rate_key(request: Request) -> str:
@@ -58,26 +58,40 @@ def login_rate_key(request: Request) -> str:
     return f"{client_ip}:{email}" if email else client_ip
 
 
-def _deliver_email_code(
-    db: Session,
+def _deliver_email_code_background(
+    user_id: int,
+    recipient: str,
+    code: str,
+    purpose: str,
+) -> None:
+    try:
+        send_email_code(recipient, code, purpose)
+    except RuntimeError as exc:
+        with SessionLocal() as db:
+            db.query(EmailCode).filter(
+                EmailCode.user_id == user_id,
+                EmailCode.purpose == purpose,
+                EmailCode.code_hash == hash_email_code(user_id, purpose, code),
+            ).delete(synchronize_session=False)
+            db.commit()
+        logger.error("Email delivery failed (%s).", type(exc).__name__)
+
+
+def _schedule_email_code(
+    background_tasks: BackgroundTasks,
     user: User,
     recipient: str,
     code: str,
     purpose: str,
 ) -> EmailDeliveryMode:
-    try:
-        delivery_mode = send_email_code(recipient, code, purpose)
-    except RuntimeError as exc:
-        db.query(EmailCode).filter(
-            EmailCode.user_id == user.id,
-            EmailCode.purpose == purpose,
-        ).delete(synchronize_session=False)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Impossible d’envoyer le code. Vérifiez la configuration SMTP du serveur.",
-        ) from exc
-    return delivery_mode or get_email_delivery_mode()
+    background_tasks.add_task(
+        _deliver_email_code_background,
+        user.id,
+        recipient,
+        code,
+        purpose,
+    )
+    return get_email_delivery_mode()
 
 
 @router.post("/signup", response_model=SignupAccepted, status_code=status.HTTP_202_ACCEPTED)
@@ -85,6 +99,7 @@ def _deliver_email_code(
 def register(
     request: Request,
     user_data: UserCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     normalized_email = str(user_data.email).lower()
@@ -114,9 +129,9 @@ def register(
 
     db.flush()
     code = issue_email_code(db, user, "verify")
-    delivery_mode = _deliver_email_code(db, user, user.email, code, "verify")
+    delivery_mode = _schedule_email_code(background_tasks, user, user.email, code, "verify")
     return {
-        "message": "Un code de vérification a été envoyé à votre adresse email.",
+        "message": "Un code de vérification va être envoyé à votre adresse email.",
         "delivery_mode": delivery_mode,
     }
 
@@ -152,6 +167,7 @@ def verify_email(
 def resend_code(
     request: Request,
     payload: EmailCodeRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     normalized_email = str(payload.email).lower()
@@ -167,7 +183,7 @@ def resend_code(
             if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
                 raise
         else:
-            delivery_mode = _deliver_email_code(db, user, send_address, code, "verify")
+            delivery_mode = _schedule_email_code(background_tasks, user, send_address, code, "verify")
     return {"message": SIGNUP_ACCEPTED_MESSAGE, "delivery_mode": delivery_mode}
 
 
@@ -213,6 +229,7 @@ def login(request: Request, login_data: UserLogin, db: Session = Depends(get_db)
 def forgot_password(
     request: Request,
     payload: EmailCodeRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     delivery_mode = get_email_delivery_mode()
@@ -224,7 +241,7 @@ def forgot_password(
             if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
                 raise
         else:
-            delivery_mode = _deliver_email_code(db, user, user.email, code, "reset")
+            delivery_mode = _schedule_email_code(background_tasks, user, user.email, code, "reset")
     return {"message": SIGNUP_ACCEPTED_MESSAGE, "delivery_mode": delivery_mode}
 
 
@@ -314,6 +331,7 @@ def delete_me(
 @router.put("/me", response_model=UserPublic)
 def update_me(
     user_data: UserUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -356,7 +374,7 @@ def update_me(
         code = issue_email_code(db, current_user, "verify")
         if current_user.pending_email is None:
             raise HTTPException(status_code=400, detail="Aucune adresse email en attente de vérification.")
-        _deliver_email_code(db, current_user, current_user.pending_email, code, "verify")
+        _schedule_email_code(background_tasks, current_user, current_user.pending_email, code, "verify")
     else:
         db.commit()
     db.refresh(current_user)

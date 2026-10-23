@@ -205,7 +205,7 @@ async def upload_datasets(
             try:
                 file_path.unlink(missing_ok=True)
             except OSError:
-                logger.warning("Uploaded file cleanup failed: path=%s", file_path)
+                logger.warning("Uploaded file cleanup failed: cleanup_count=1")
         raise
     except Exception as error:
         db.rollback()
@@ -213,7 +213,7 @@ async def upload_datasets(
             try:
                 file_path.unlink(missing_ok=True)
             except OSError:
-                logger.warning("Uploaded file cleanup failed: path=%s", file_path)
+                logger.warning("Uploaded file cleanup failed: cleanup_count=1")
         logger.error("Dataset upload failed: uploaded_count=%s", len(uploaded_datasets))
         raise HTTPException(status_code=500, detail="Could not upload the selected files.") from error
     finally:

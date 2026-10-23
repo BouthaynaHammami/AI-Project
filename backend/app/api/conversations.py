@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.analyses import ask_question
@@ -47,7 +48,7 @@ def _conversation_response(conversation: Conversation) -> ConversationResponse:
     )
 
 
-def _message_response(message: Message) -> MessageResponse:
+def _message_response(message: Message, user_id: int, db: Session) -> MessageResponse:
     result_data = None
     if message.result_data:
         try:
@@ -56,8 +57,20 @@ def _message_response(message: Message) -> MessageResponse:
             parsed = None
         if isinstance(parsed, dict):
             result_data = parsed
+    if message.role == "assistant" and message.analysis_id is not None:
+        feedback = db.query(Feedback).filter(
+            Feedback.analysis_id == message.analysis_id,
+            Feedback.user_id == user_id,
+        ).first()
+        if feedback is not None:
+            result_data = result_data or {}
+            result_data["feedback"] = {
+                "rating": feedback.rating,
+                "comment": feedback.comment,
+            }
     return MessageResponse(
         id=message.id,
+        analysis_id=message.analysis_id,
         role=message.role,
         content=message.content,
         result_data=result_data,
@@ -116,16 +129,44 @@ def create_conversation(
 def list_conversations(
     q: str | None = Query(default=None, max_length=200),
     favorite: bool | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(Conversation).filter(Conversation.user_id == current_user.id)
+    active_analysis = db.query(Analysis.id).filter(
+        Analysis.conversation_id == Conversation.id,
+        Analysis.user_id == current_user.id,
+        Analysis.deleted_at.is_(None),
+    ).exists()
+    any_analysis = db.query(Analysis.id).filter(
+        Analysis.conversation_id == Conversation.id,
+        Analysis.user_id == current_user.id,
+    ).exists()
+    query = query.filter(or_(active_analysis, ~any_analysis))
     if favorite is True:
         query = query.filter(Conversation.is_favorite.is_(True))
     if q and q.strip():
         escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        query = query.filter(Conversation.title.ilike(f"%{escaped}%", escape="\\"))
-    conversations = query.order_by(Conversation.updated_at.desc(), Conversation.id.desc()).all()
+        term = f"%{escaped}%"
+        matching_analysis = db.query(Analysis.id).filter(
+            Analysis.conversation_id == Conversation.id,
+            Analysis.user_id == current_user.id,
+            Analysis.deleted_at.is_(None),
+            or_(
+                Analysis.question.ilike(term, escape="\\"),
+                Analysis.answer.ilike(term, escape="\\"),
+                Analysis.title.ilike(term, escape="\\"),
+            ),
+        ).exists()
+        query = query.filter(or_(Conversation.title.ilike(term, escape="\\"), matching_analysis))
+    conversations = (
+        query.order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return [_conversation_response(conversation) for conversation in conversations]
 
 
@@ -163,6 +204,7 @@ def get_conversation(
             ))
             result.append(MessageResponse(
                 id=analysis.id * 2 + 1,
+                analysis_id=analysis.id,
                 role="assistant",
                 content=analysis.answer,
                 result_data={
@@ -171,13 +213,24 @@ def get_conversation(
                     "generated_code": analysis.generated_code,
                     "code_explanation": analysis.code_explanation,
                     "code_retried": analysis.code_retried,
+                    "feedback": (
+                        {
+                            "rating": feedback.rating,
+                            "comment": feedback.comment,
+                        }
+                        if (feedback := db.query(Feedback).filter(
+                            Feedback.analysis_id == analysis.id,
+                            Feedback.user_id == current_user.id,
+                        ).first()) is not None
+                        else None
+                    ),
                 },
                 created_at=analysis.created_at,
             ))
         return ConversationDetail(**_conversation_response(conversation).model_dump(), messages=result)
     return ConversationDetail(
         **_conversation_response(conversation).model_dump(),
-        messages=[_message_response(message) for message in messages],
+        messages=[_message_response(message, current_user.id, db) for message in messages],
     )
 
 

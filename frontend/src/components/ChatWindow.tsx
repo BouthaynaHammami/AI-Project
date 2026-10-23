@@ -1,13 +1,17 @@
-import { ArrowDownUp, Bot, Check, Copy, LoaderCircle, MessageCircle, Paperclip, Send, UserRound } from 'lucide-react'
-import { useRef, useState, type ChangeEvent } from 'react'
+import { ArrowDownUp, Bot, Check, Copy, LoaderCircle, MessageCircle, Paperclip, Send, ThumbsDown, ThumbsUp, UserRound } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { getApiError } from '../services/api'
+import { deleteFeedback, saveFeedback } from '../services/analysisService'
 import type { ChartConfig, Message } from '../types'
+import { ChartRenderer } from './ChartRenderer'
 
 type Props = {
   messages: Message[]
   isAnalyzing: boolean
+  conversationId?: number | null
   onAsk: (question: string) => void
   onAddFiles: (files: File[]) => Promise<void>
+  onNewConversation?: () => void
 }
 
 type ParsedTable = {
@@ -73,6 +77,10 @@ function AnswerText({ content }: { content: string }) {
 function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (question: string) => void }) {
   const [sort, setSort] = useState<{ column: number; direction: 'asc' | 'desc' } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [codeCopied, setCodeCopied] = useState(false)
+  const [feedback, setFeedback] = useState(message.feedback ?? null)
+  const [feedbackSaving, setFeedbackSaving] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
   const table = parseMarkdownTable(message.content) ?? (message.resultTable
     ? {
         headers: message.resultTable.headers,
@@ -87,18 +95,11 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
   } catch {
     chartConfig = null
   }
-  const chartLabels = chartConfig && Array.isArray(chartConfig.labels) ? chartConfig.labels : []
-  const chartValues = chartConfig && Array.isArray(chartConfig.values)
-    ? chartConfig.values
-    : chartConfig?.series?.[0]?.values ?? []
-  const hasChart = Boolean(
-    chartConfig
-    && chartLabels.length > 0
-    && chartLabels.length === chartValues.length
-    && chartValues.every((value) => Number.isFinite(value)),
-  )
-  const maxChartValue = Math.max(...chartValues, 1)
   const rows = table ? [...table.rows] : []
+
+  useEffect(() => {
+    setFeedback(message.feedback ?? null)
+  }, [message.feedback])
 
   if (table && sort) {
     rows.sort((left, right) => {
@@ -120,6 +121,40 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
       window.setTimeout(() => setCopied(false), 1800)
     } catch {
       setCopied(false)
+    }
+  }
+
+  const copyGeneratedCode = async () => {
+    if (!message.generatedCode) return
+    try {
+      await navigator.clipboard.writeText(message.generatedCode)
+      setCodeCopied(true)
+      window.setTimeout(() => setCodeCopied(false), 1800)
+    } catch {
+      setCodeCopied(false)
+    }
+  }
+
+  const updateFeedback = async (
+    rating: -1 | 1,
+    comment: string | null = null,
+    toggleExisting = false,
+  ) => {
+    if (!message.analysisId || feedbackSaving) return
+    setFeedbackSaving(true)
+    setFeedbackError('')
+    try {
+      if (toggleExisting && feedback?.rating === rating) {
+        await deleteFeedback(message.analysisId)
+        setFeedback(null)
+      } else {
+        const updated = await saveFeedback(message.analysisId, { rating, comment })
+        setFeedback({ rating: updated.rating, comment: updated.comment })
+      }
+    } catch (error) {
+      setFeedbackError(getApiError(error))
+    } finally {
+      setFeedbackSaving(false)
     }
   }
 
@@ -158,17 +193,71 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
       ) : (
         <AnswerText content={message.content} />
       )}
-      {hasChart && chartConfig && (
+      {chartConfig && (
         <div className="message-chart">
-          <strong>{chartConfig.title}</strong>
-          <div className="saved-chart" aria-label={`Graphique de ${chartConfig.title}`}>
-            {chartValues.map((value, index) => (
-              <div className="saved-chart-bar" key={`${chartLabels[index]}-${index}`}>
-                <span style={{ height: `${Math.max((value / maxChartValue) * 100, 4)}%` }} />
-                <small>{chartLabels[index]}</small>
-              </div>
-            ))}
+          <ChartRenderer config={chartConfig} />
+        </div>
+      )}
+      {message.generatedCode && (
+        <details className="generated-code">
+          <summary>Voir le code généré</summary>
+          <div className="generated-code-content">
+            <div className="generated-code-toolbar">
+              {message.codeRetried && <span className="generated-code-badge">Corrigé automatiquement</span>}
+              <button
+                type="button"
+                onClick={() => void copyGeneratedCode()}
+                aria-label={codeCopied ? 'Code généré copié' : 'Copier le code généré'}
+              >
+                {codeCopied ? <Check size={14} /> : <Copy size={14} />}
+                {codeCopied ? 'Copié' : 'Copier'}
+              </button>
+            </div>
+            <pre><code>{message.generatedCode}</code></pre>
+            {message.codeExplanation && <p>{message.codeExplanation}</p>}
           </div>
+        </details>
+      )}
+      {message.analysisId && (
+        <div className="message-feedback" aria-label="Évaluer cette réponse">
+          <button
+            type="button"
+            className={feedback?.rating === 1 ? 'message-feedback-selected' : ''}
+            aria-label="Bonne réponse"
+            aria-pressed={feedback?.rating === 1}
+            disabled={feedbackSaving}
+            onClick={() => void updateFeedback(1, null, true)}
+          >
+            <ThumbsUp size={14} strokeWidth={1.7} />
+          </button>
+          <button
+            type="button"
+            className={feedback?.rating === -1 ? 'message-feedback-selected' : ''}
+            aria-label="Mauvaise réponse"
+            aria-pressed={feedback?.rating === -1}
+            disabled={feedbackSaving}
+            onClick={() => void updateFeedback(-1, null, true)}
+          >
+            <ThumbsDown size={14} strokeWidth={1.7} />
+          </button>
+          {feedback?.rating === -1 && (
+            <label className="message-feedback-reason">
+              <span>Que s'est-il passé ?</span>
+              <select
+                aria-label="Que s'est-il passé ?"
+                value={feedback.comment ?? ''}
+                disabled={feedbackSaving}
+                onChange={(event) => void updateFeedback(-1, event.target.value || null)}
+              >
+                <option value="">Choisir (facultatif)</option>
+                <option value="Mauvais chiffre">Mauvais chiffre</option>
+                <option value="Graphique inutile">Graphique inutile</option>
+                <option value="Ne répond pas à la question">Ne répond pas à la question</option>
+                <option value="Autre">Autre</option>
+              </select>
+            </label>
+          )}
+          {feedbackError && <span className="message-feedback-error" role="alert">{feedbackError}</span>}
         </div>
       )}
       <div className="answer-actions">
@@ -185,7 +274,7 @@ function AssistantResponse({ message, onAsk }: { message: Message; onAsk: (quest
   )
 }
 
-export function ChatWindow({ messages, isAnalyzing, onAsk, onAddFiles }: Props) {
+export function ChatWindow({ messages, isAnalyzing, conversationId, onAsk, onAddFiles, onNewConversation }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [question, setQuestion] = useState('')
   const [addingFiles, setAddingFiles] = useState(false)
@@ -220,7 +309,14 @@ export function ChatWindow({ messages, isAnalyzing, onAsk, onAddFiles }: Props) 
           <span className="section-kicker">ÉTAPE 02</span>
           <h2>Posez votre question</h2>
         </div>
-        <span className="online-dot">IA en ligne</span>
+        <div className="chat-heading-actions">
+          <span className="online-dot">IA en ligne</span>
+          {conversationId != null && onNewConversation && (
+            <button type="button" className="new-conversation-button" onClick={onNewConversation} disabled={isAnalyzing}>
+              Nouvelle conversation
+            </button>
+          )}
+        </div>
       </div>
       <div className="messages" role="log" aria-live="polite">
         {messages.map((message) => (

@@ -23,7 +23,7 @@ export function HistorySearch({ value, favoriteOnly, inputRef, onChange, onToggl
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Titres, questions…"
+          placeholder="Rechercher dans l’historique"
           aria-label="Rechercher dans l’historique"
           autoComplete="off"
         />

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 os.environ["ENV"] = "dev"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-with-at-least-32-characters"
@@ -93,6 +94,47 @@ def test_conversation_id_from_another_user_is_rejected(monkeypatch):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Conversation introuvable."
+
+
+def test_conversation_search_matches_analysis_text_and_hides_soft_deleted_conversations():
+    owner_id, _, dataset_id, conversation_id = _create_user_dataset_and_conversation()
+    with TestSession() as db:
+        db.add(Analysis(
+            user_id=owner_id,
+            conversation_id=conversation_id,
+            dataset_id=dataset_id,
+            question="Ventes en région Nord",
+            answer="Le total est 42.",
+            result_type="text",
+            title="Résumé des ventes",
+        ))
+        db.commit()
+
+    response = client.get("/conversations?q=nOrD", headers=_headers(owner_id))
+    assert response.status_code == 200
+    assert [conversation["id"] for conversation in response.json()] == [conversation_id]
+
+    with TestSession() as db:
+        analysis = db.query(Analysis).filter(Analysis.conversation_id == conversation_id).one()
+        analysis.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+
+    hidden = client.get("/conversations?q=nOrD", headers=_headers(owner_id))
+    assert hidden.status_code == 200
+    assert hidden.json() == []
+
+
+def test_conversation_list_accepts_bounded_pagination():
+    owner_id, _, _, conversation_id = _create_user_dataset_and_conversation()
+    first_page = client.get("/conversations?limit=1&offset=0", headers=_headers(owner_id))
+    next_page = client.get("/conversations?limit=1&offset=1", headers=_headers(owner_id))
+    invalid_limit = client.get("/conversations?limit=101", headers=_headers(owner_id))
+
+    assert first_page.status_code == 200
+    assert [item["id"] for item in first_page.json()] == [conversation_id]
+    assert next_page.status_code == 200
+    assert next_page.json() == []
+    assert invalid_limit.status_code == 422
 
 
 def test_analysis_creates_and_reuses_conversation_and_history_groups_metadata(monkeypatch):

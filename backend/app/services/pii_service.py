@@ -116,12 +116,17 @@ def detect_pii(dataframe: pd.DataFrame) -> dict[str, Any]:
                 value_categories.update(categories)
         if header_category or affected:
             category = header_category or value_categories.most_common(1)[0][0]
+            strongly_verified_categories = {"email", "iban", "carte bancaire", "IP"}
             columns.append({
                 "name": name,
                 "position": position,
                 "category": category,
                 "values_touched": non_null_count if header_category else affected,
-                "confidence": "high" if header_category or affected > 0 else "medium",
+                "confidence": (
+                    "high"
+                    if header_category or value_categories.keys() & strongly_verified_categories
+                    else "medium"
+                ),
             })
     return {
         "columns": columns,

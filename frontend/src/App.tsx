@@ -1,23 +1,27 @@
-import { ArrowRight, BarChart3, Check, CheckCircle2, ChevronRight, Database, FileChartColumn, LockKeyhole, Sparkles } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowRight, BarChart3, Check, CheckCircle2, ChevronRight, Database, FileChartColumn, LockKeyhole, Shield, Sparkles } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { AuthPage } from './components/AuthPage'
 import { AnalysisBar } from './components/AnalysisBar'
 import { AnalysisPage } from './components/AnalysisPage'
 import { SettingsPage } from './components/SettingsPage'
 import { Sidebar } from './components/Sidebar'
 import { PublicSharedAnalysis } from './components/PublicSharedAnalysis'
+import { AdminPage } from './components/AdminPage'
 import { useDemoData } from './hooks/useDemoData'
 import { getApiError } from './services/api'
 import { getProfile, login, logout, requestPasswordReset, resendVerificationCode, resetPassword, signup, verifyEmail } from './services/authService'
-import { uploadFiles, type DatasetPreview } from './services/fileService'
+import { getDatasetPreview, uploadFiles, type DatasetPreview } from './services/fileService'
+import { getMyUsage, type UsageSnapshot } from './services/usageService'
 
 function Landing({ onAuth }: { onAuth: (type: 'signup' | 'login') => void }) {
   return <div className="landing"><header className="landing-header"><div className="brand"><span className="brand-mark"><BarChart3 size={18} /></span><span>AI Data <b>Analyst</b></span></div><nav><button className="nav-login" onClick={() => onAuth('login')}>Log In</button><button className="nav-signup" onClick={() => onAuth('signup')}>Sign Up <ArrowRight size={15} /></button></nav></header><main className="hero"><div className="hero-copy"><div className="eyebrow"><span className="eyebrow-line" /> ANALYSEZ AVEC CLARTÉ</div><h1>Vos données.<br /><em>Des réponses</em><br />qui comptent.</h1><p>Importez vos données, posez vos questions, obtenez des analyses instantanées grâce à l’IA.</p><div className="trust-line"><span><Check size={14} /> Sans carte bancaire</span><span><LockKeyhole size={14} /> Données sécurisées</span></div></div><div className="hero-visual"><div className="visual-grid" /><div className="floating-card card-main"><div className="card-label"><span className="live-dot" /> ANALYSE EN COURS</div><div className="visual-title">Performance<br /><b>étudiants</b></div><div className="mini-chart"><span style={{ height: '34%' }} /><span style={{ height: '48%' }} /><span style={{ height: '43%' }} /><span style={{ height: '68%' }} /><span style={{ height: '58%' }} /><span style={{ height: '86%' }} /><span style={{ height: '76%' }} /></div><div className="chart-caption"><span>Jan</span><span>Juil</span><strong>+24.8%</strong></div></div><div className="floating-card card-stat"><span className="stat-icon"><Sparkles size={15} /></span><strong>1,204</strong><small>lignes analysées</small></div><div className="floating-card card-question"><span className="question-mark">?</span><span>Pourquoi ce pic<br />en juin ?</span><ChevronRight size={14} /></div></div></main><section className="landing-bottom"><div><Database size={18} /><span><b>Un espace unique</b> pour comprendre vos données</span></div><div><FileChartColumn size={18} /><span><b>Des réponses visuelles</b> en quelques secondes</span></div><div><BarChart3 size={18} /><span><b>Des décisions éclairées</b> par des faits</span></div></section></div>
 }
 
-function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: string; profilePhoto: string; onSettings: () => void; onLogout: () => void }) {
+function Analyst({ userName, profilePhoto, isAdmin, onSettings, onLogout, onAdmin }: { userName: string; profilePhoto: string; isAdmin: boolean; onSettings: () => void; onLogout: () => void; onAdmin: () => void }) {
   const {
     history,
+    hasMore: historyHasMore,
+    loading: historyLoading,
     messages,
     isAnalyzing,
     activeConversationId,
@@ -26,20 +30,51 @@ function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: s
     createNewConversation,
     updateConversationDatasets,
     loadHistoryEntry,
+    selectDataset,
     refreshHistory,
     remove,
     rename,
     toggleFavorite,
+    undoEntry,
+    cascadePrompt,
+    undoRemove,
+    confirmCascade,
+    cancelCascade,
+    searchHistory,
+    loadMore,
   } = useDemoData()
   const [analysis, setAnalysis] = useState<{ datasets: DatasetPreview[]; question: string; chartConfig: string | null } | null>(null)
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null)
+  const [usageError, setUsageError] = useState('')
   const initials = userName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'U'
+  const refreshUsage = useCallback(async () => {
+    try {
+      setUsage(await getMyUsage())
+      setUsageError('')
+    } catch {
+      setUsage(null)
+      setUsageError('Quota indisponible')
+    }
+  }, [])
+  useEffect(() => { void refreshUsage() }, [refreshUsage])
   const startNewConversation = async () => {
     setAnalysis(null)
     await createNewConversation()
   }
-  const openHistory = async (id: number) => {
+  const startChatConversation = async () => {
+    const datasetIds = analysis?.datasets.map((dataset) => dataset.dataset_id) ?? []
+    await createNewConversation(datasetIds)
+    setAnalysis((current) => current ? { ...current, chartConfig: null } : current)
+  }
+  const openHistory = async (item: import('./types').HistoryEntry) => {
     try {
-      const selected = await loadHistoryEntry(id)
+      if (item.kind === 'import') {
+        const dataset = await getDatasetPreview(item.datasetId)
+        selectDataset()
+        setAnalysis({ datasets: [dataset], question: '', chartConfig: null })
+        return
+      }
+      const selected = await loadHistoryEntry(item.conversationId ?? item.id)
       if (selected) {
         setAnalysis({ datasets: selected.datasets, question: selected.question, chartConfig: selected.chartConfig })
       }
@@ -57,7 +92,8 @@ function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: s
       await updateConversationDatasets(conversationId, [...new Set([...currentDatasetIds, ...selectedDatasetIds])])
     }
     const answer = await askQuestion(question, selectedDatasetIds, conversationId)
-    if (answer?.chart_config) setAnalysis((current) => current ? { ...current, chartConfig: answer.chart_config } : current)
+    void refreshUsage()
+    if (answer) setAnalysis((current) => current ? { ...current, chartConfig: answer.chart_config ?? null } : current)
   }
   const addFilesToAnalysis = async (files: File[]) => {
     const addedDatasets = await uploadFiles(files)
@@ -77,7 +113,8 @@ function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: s
     setAnalysis({ datasets, question, chartConfig: null })
     if (!question.trim()) return
     const answer = await askQuestion(question, datasetIds, conversationId)
-    if (answer?.chart_config) setAnalysis((current) => current ? { ...current, chartConfig: answer.chart_config } : current)
+    void refreshUsage()
+    if (answer) setAnalysis((current) => current ? { ...current, chartConfig: answer.chart_config ?? null } : current)
   }
   return (
     <div className="app-shell">
@@ -89,25 +126,42 @@ function Analyst({ userName, profilePhoto, onSettings, onLogout }: { userName: s
         error={historyError}
         onRetry={() => void refreshHistory()}
         onNew={() => void startNewConversation().catch(() => undefined)}
-        onHistory={(id) => void openHistory(id)}
+        onHistory={(item) => void openHistory(item)}
         onSettings={onSettings}
         onLogout={onLogout}
         onRename={rename}
         onToggleFavorite={toggleFavorite}
         onRemove={remove}
+        undoEntry={undoEntry}
+        onUndoRemove={() => void undoRemove()}
+        cascadePrompt={cascadePrompt}
+        onConfirmCascade={() => void confirmCascade()}
+        onCancelCascade={cancelCascade}
+        onSearch={searchHistory}
+        loading={historyLoading}
+        hasMore={historyHasMore}
+        onLoadMore={loadMore}
       />
       <main className="workspace">
         <header className="workspace-header">
           <div><span className="workspace-kicker">ESPACE D’ANALYSE</span><h1>{analysis ? 'Analyse détaillée' : `Bonjour, ${userName}`} <span>{analysis ? '📊' : '👋'}</span></h1></div>
-          <button className="user-chip" onClick={onSettings}>
-            <span className={`user-chip-avatar ${profilePhoto ? 'user-chip-avatar-image' : ''}`}>{profilePhoto ? <img src={profilePhoto} alt="Photo de profil" /> : initials}</span>
-            <div><strong>{userName}</strong></div>
-          </button>
+          <div className="workspace-header-actions">
+            {usage && <div className="usage-meter" aria-label={`${usage.used} sur ${usage.quota} analyses utilisées ce mois`} title={`Réinitialisation : ${new Date(usage.reset_at).toLocaleDateString('fr-FR')}`}>
+              <div className="usage-meter-label"><span>Quota mensuel</span><strong>{usage.used} / {usage.quota}</strong></div>
+              <div className="usage-meter-track" role="progressbar" aria-valuemin={0} aria-valuemax={usage.quota} aria-valuenow={Math.min(usage.used, usage.quota)}><span style={{ width: `${usage.quota > 0 ? Math.min(100, usage.used / usage.quota * 100) : 100}%` }} /></div>
+            </div>}
+            {usageError && <span className="usage-error" role="status">{usageError}</span>}
+            {isAdmin && <button className="admin-nav-button" onClick={onAdmin}><Shield size={15} /> Administration</button>}
+            <button className="user-chip" onClick={onSettings}>
+              <span className={`user-chip-avatar ${profilePhoto ? 'user-chip-avatar-image' : ''}`}>{profilePhoto ? <img src={profilePhoto} alt="Photo de profil" /> : initials}</span>
+              <div><strong>{userName}</strong></div>
+            </button>
+          </div>
         </header>
         <div className="workspace-content">
           {analysis
-            ? <AnalysisPage datasets={analysis.datasets} firstQuestion={analysis.question} messages={messages} isAnalyzing={isAnalyzing} chartConfig={analysis.chartConfig} onAsk={(question, datasetIds) => void askFromAnalysis(question, datasetIds)} onAddFiles={addFilesToAnalysis} />
-            : <><div className="page-intro"><div><h2>Nouvelle analyse</h2><p>Transformez une question en décision.</p></div><span className="usage-pill">12 / 50 analyses ce mois</span></div><AnalysisBar onAnalyze={(dataset, question) => void startAnalysis(dataset, question)} /></>}
+            ? <AnalysisPage datasets={analysis.datasets} conversationId={activeConversationId} firstQuestion={analysis.question} messages={messages} isAnalyzing={isAnalyzing} chartConfig={analysis.chartConfig} onAsk={(question, datasetIds) => void askFromAnalysis(question, datasetIds)} onAddFiles={addFilesToAnalysis} onNewConversation={() => void startChatConversation().catch(() => undefined)} />
+            : <><div className="page-intro"><div><h2>Nouvelle analyse</h2><p>Transformez une question en décision.</p></div></div><AnalysisBar onAnalyze={(dataset, question) => void startAnalysis(dataset, question)} /></>}
         </div>
       </main>
     </div>
@@ -120,6 +174,8 @@ function AppShell() {
   const [profilePhoto, setProfilePhoto] = useState(localStorage.getItem('user_photo') || '')
   const [authPage, setAuthPage] = useState<'signup' | 'login' | null>(null)
   const [settingsPage, setSettingsPage] = useState(false)
+  const [adminPage, setAdminPage] = useState(window.location.pathname === '/admin')
+  const [role, setRole] = useState('user')
   const [accountDeletionNotice, setAccountDeletionNotice] = useState<number | null>(null)
 
   useEffect(() => {
@@ -127,6 +183,7 @@ function AppShell() {
       setIsLoggedIn(false)
       setSettingsPage(false)
       setProfilePhoto('')
+      setRole('user')
     }
 
     window.addEventListener('auth:expired', onExpired)
@@ -135,6 +192,7 @@ function AppShell() {
         .then((profile) => {
           setUserName(profile.name)
           setProfilePhoto(profile.profile_photo || '')
+          setRole(profile.role || 'user')
         })
         .catch(onExpired)
     }
@@ -155,6 +213,7 @@ function AppShell() {
       const profile = await getProfile()
       setUserName(profile.name)
       setProfilePhoto(profile.profile_photo || '')
+      setRole(profile.role || 'user')
       setIsLoggedIn(true)
       setAuthPage(null)
     } catch (error) {
@@ -167,6 +226,7 @@ function AppShell() {
     setIsLoggedIn(false)
     setSettingsPage(false)
     setProfilePhoto('')
+    setRole('user')
   }
 
   if (isLoggedIn && settingsPage) {
@@ -180,6 +240,7 @@ function AppShell() {
           setSettingsPage(false)
         }}
         onSavePhoto={setProfilePhoto}
+        onVerifyEmail={async (email, code) => { await verifyEmail({ email, code }) }}
         onAccountDeleted={(filesCleanupPending) => {
           setIsLoggedIn(false)
           setSettingsPage(false)
@@ -191,8 +252,25 @@ function AppShell() {
     )
   }
 
+  if (isLoggedIn && adminPage) {
+    return <AdminPage onBack={() => {
+      window.history.pushState({}, '', '/')
+      setAdminPage(false)
+    }} />
+  }
+
   if (isLoggedIn) {
-    return <Analyst userName={userName} profilePhoto={profilePhoto} onSettings={() => setSettingsPage(true)} onLogout={signOut} />
+    return <Analyst
+      userName={userName}
+      profilePhoto={profilePhoto}
+      isAdmin={role === 'admin'}
+      onSettings={() => setSettingsPage(true)}
+      onLogout={signOut}
+      onAdmin={() => {
+        window.history.pushState({}, '', '/admin')
+        setAdminPage(true)
+      }}
+    />
   }
   if (authPage) {
     return <AuthPage
@@ -204,6 +282,7 @@ function AppShell() {
         const profile = await getProfile()
         setUserName(profile.name)
         setProfilePhoto(profile.profile_photo || '')
+        setRole(profile.role || 'user')
         setIsLoggedIn(true)
         setAuthPage(null)
       }}
@@ -235,6 +314,6 @@ function AppShell() {
 
 export default function App() {
   const shareToken = window.location.pathname.match(/^\/share\/([^/]+)$/)?.[1]
-  if (shareToken) return <PublicSharedAnalysis token={decodeURIComponent(shareToken)} />
+  if (shareToken) return <PublicSharedAnalysis token={shareToken} />
   return <AppShell />
 }

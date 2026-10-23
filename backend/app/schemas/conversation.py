@@ -36,6 +36,7 @@ class ConversationMessageCreate(BaseModel):
 
 class MessageResponse(BaseModel):
     id: int
+    analysis_id: int | None = None
     role: Literal["user", "assistant"]
     content: str
     result_data: dict[str, object] | None = None

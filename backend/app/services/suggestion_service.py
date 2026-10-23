@@ -24,11 +24,16 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 24 * 60 * 60
 _CACHE_LIMIT = 512
-_MAX_CONTEXT_CHARS = 10_000
+_MAX_CONTEXT_CHARS = 7_500
 _cache: dict[str, tuple[float, list["Suggestion"]]] = {}
 _refresh_times: dict[int, float] = {}
 _cache_lock = threading.RLock()
-_PII_COLUMN = re.compile(r"(?<![a-z])(?:nom|prenom|prénom|email|e-mail|tel|telephone|téléphone|cin|iban|adresse)(?![a-z])", re.I)
+_PII_COLUMN = re.compile(
+    r"(?<![a-z])(?:nom|prenom|prénom|name|firstname|surname|lastname|"
+    r"email|e-mail|courriel|tel|telephone|téléphone|phone|mobile|fax|"
+    r"cin|iban|adresse|address|street)(?![a-z])",
+    re.I,
+)
 _ID_COLUMN = re.compile(r"^(?:id|uuid|guid)(?:[_\s-].*)?$", re.I)
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
@@ -552,7 +557,8 @@ Réponds UNIQUEMENT avec ce JSON, sans texte autour :
         content = response.choices[0].message.content or ""
         return _validate_suggestions(content, context)
     except GroqGlobalLimitExceeded:
-        raise
+        logger.warning("Suggestion generation fell back to rules (global_limit).")
+        return None
     except Exception as error:
         # No user data or provider response is included in logs.
         logger.warning("Suggestion generation fell back to rules (%s).", type(error).__name__)
